@@ -41,11 +41,16 @@ def _import_violations(path: Path, *allowed: str) -> list[str]:
     ]
 
 
-def test_review_workflow_imports_only_stdlib_and_review_modules() -> None:
+def test_review_workflow_imports_only_stdlib_review_and_wire_contract_dependencies() -> (
+    None
+):
+    contract = _PACKAGE / "review" / "inventory_contract.py"
     violations = [
         violation
         for path in (_PACKAGE / "review").rglob("*.py")
-        for violation in _import_violations(path, _REVIEW)
+        for violation in _import_violations(
+            path, _REVIEW, *(("pydantic",) if path == contract else ())
+        )
     ]
     assert not violations, "Unexpected review imports:\n" + "\n".join(violations)
 

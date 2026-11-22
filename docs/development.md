@@ -21,6 +21,15 @@ Run these from the repository root:
 
 A wheel built with `mise run package` includes the browser workspace assets. It doesn’t need Node.js or the checkout at runtime. If `loop-reviewer ui` reports a missing bundle in the checkout, run `mise run web` to rebuild it and launch the workspace.
 
+## Standalone reviewer schemas
+
+The v1 [request](schemas/reviewer-request-v1.json) and [result](schemas/reviewer-result-v1.json) schemas are generated from the same records that validate the standalone reviewer’s JSON. Regenerate them from the repository root:
+
+```sh
+mise exec -- uv run --locked python -c 'import json; from loop_reviewer.review.inventory_contract import ReviewerRequest; print(json.dumps(ReviewerRequest.model_json_schema(), indent=2))' > docs/schemas/reviewer-request-v1.json
+mise exec -- uv run --locked python -c 'import json; from loop_reviewer.review.inventory_contract import ReviewerResult; print(json.dumps(ReviewerResult.model_json_schema(), indent=2))' > docs/schemas/reviewer-result-v1.json
+```
+
 ## Code map
 
 The Python backend is organized around two workflows. Each declares the capabilities it needs; adapters supply those capabilities.
