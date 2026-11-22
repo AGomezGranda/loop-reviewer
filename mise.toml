@@ -1,0 +1,49 @@
+[tools]
+python = "3.15.2"
+uv = "0.13.9"
+node = "26.8.1"
+pnpm = "11.5.0"
+
+[env]
+# macOS can mark files under .venv hidden, which prevents Python from loading the editable install.
+UV_PROJECT_ENVIRONMENT = "venv"
+
+[tasks.setup]
+description = "Install locked Python and web dependencies"
+run = ["pnpm --dir web install --frozen-lockfile", "pnpm --dir web build", "uv sync --locked"]
+
+[tasks.check]
+description = "Check formatting, lint, types, and import boundaries"
+run = [
+    "uv run --locked ruff format --check src tests",
+    "uv run --locked ruff check src tests",
+    "uv run --locked pyrefly check",
+    "uv run --locked lint-imports",
+    "pnpm --dir web check",
+    "pnpm --dir web architecture:check",
+    "pnpm --dir web api:check",
+]
+
+[tasks.format]
+description = "Format Python and web files"
+run = ["uv run --locked ruff format src tests", "pnpm --dir web format"]
+
+[tasks.test]
+description = "Run Python and web tests"
+run = ["uv run --locked pytest", "pnpm --dir web test"]
+
+[tasks."test:e2e"]
+description = "Build the web app and run browser tests"
+run = ["pnpm --dir web build", "pnpm --dir web test:e2e"]
+
+[tasks."test:install-browser"]
+description = "Install Chromium for browser tests"
+run = "pnpm --dir web exec playwright install chromium"
+
+[tasks.web]
+description = "Build and open the local review workspace"
+run = ["pnpm --dir web build", "uv run --locked loop-reviewer ui"]
+
+[tasks.package]
+description = "Build the Python distributions with the browser bundle"
+run = ["pnpm --dir web build", "uv build"]

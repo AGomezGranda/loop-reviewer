@@ -1,0 +1,54 @@
+[importlinter]
+root_packages =
+    loop_reviewer
+
+[importlinter:contract:1]
+name = Dependencies point inward toward inbox and review workflows
+type = layers
+layers =
+    loop_reviewer.cli
+    loop_reviewer.composition
+    loop_reviewer.integrations | loop_reviewer.local_http
+    loop_reviewer.inbox
+    loop_reviewer.review
+
+[importlinter:contract:2]
+name = Package imports are acyclic, including within subpackages
+type = acyclic_siblings
+ancestors =
+    loop_reviewer
+
+[importlinter:contract:3]
+name = CLI output is independent of integrations
+type = forbidden
+source_modules =
+    loop_reviewer.cli.output
+    loop_reviewer.cli.inbox_output
+forbidden_modules =
+    loop_reviewer.integrations
+
+[importlinter:contract:4]
+name = Review rules do not depend on workflow operations or persistence ports
+type = forbidden
+source_modules =
+    loop_reviewer.review.model
+    loop_reviewer.review.pull_request
+    loop_reviewer.review.publication_model
+forbidden_modules =
+    loop_reviewer.review.publication
+    loop_reviewer.review.generate
+    loop_reviewer.review.drafts
+    loop_reviewer.review.selection
+    loop_reviewer.review.store
+    loop_reviewer.review.history
+
+[importlinter:contract:5]
+name = Inbox rules do not depend on workflow operations or persistence ports
+type = forbidden
+source_modules =
+    loop_reviewer.inbox.model
+forbidden_modules =
+    loop_reviewer.inbox.actions
+    loop_reviewer.inbox.discovery
+    loop_reviewer.inbox.polling
+    loop_reviewer.inbox.store

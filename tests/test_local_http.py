@@ -1,0 +1,553 @@
+import asyncio
+import socket
+import sqlite3
+import sys
+from collections.abc import AsyncGenerator
+from contextlib import closing, nullcontext
+from dataclasses import replace
+from pathlib import Path
+from threading import Event, Thread
+from time import monotonic, sleep
+from typing import Literal, override
+
+import httpx
+import pytest
+from fastapi import FastAPI
+
+from loop_reviewer import cli, composition
+from loop_reviewer.composition import Workflows
+from loop_reviewer.inbox.discovery import RepositoryDiscoveryError
+from loop_reviewer.inbox.model import (
+    DiscoveredPullRequest,
+    JiraProjectKey,
+    RepositoryAddress,
+    WatchedRepository,
+)
+from loop_reviewer.integrations.local_state.inbox_watch import InboxWatch
+from loop_reviewer.integrations.local_state.sqlite_inbox import SqliteInboxStore
+from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
+from loop_reviewer.local_http.app import create_app
+from loop_reviewer.local_http.serve import BrowserServer
+from loop_reviewer.review.history import ReviewHistory
+from loop_reviewer.review.model import PublicationReceipt, ReviewDraft, ReviewSelection
+from loop_reviewer.review.publication_model import PublicationPreview
+from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
+from loop_reviewer.review.store import ReviewStoreError
+
+from .support.browser_review import (
+    FakePublication,
+    FakeReader,
+    FakeReviewer,
+    fake_gh_environment,
+)
+
+_ORIGIN = "http://127.0.0.1:43210"
+_HEADERS = {"Authorization": "Bearer test-capability", "Origin": _ORIGIN}
+
+
+pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+def _app(
+    workflows: Workflows, watcher: InboxWatch, *, origin: str = _ORIGIN
+) -> FastAPI:
+    return create_app(
+        origin=origin,
+        capability="test-capability",
+        read_inbox=workflows.read_inbox().run,
+        scan_inbox=watcher.scan_now,
+        configure_inbox=workflows.configure_inbox(),
+        inbox_actions=workflows.inbox_actions(),
+        review_pull_request=lambda ref, retry: workflows.review(ref, retry=retry),
+        drafts=workflows.edit_review_draft(),
+        review_history=workflows.review_history(),
+        prepare=workflows.prepare_publication(),
+        publish=workflows.publish_review(),
+        join_watch=watcher.join,
+        watch_tick=watcher.tick,
+        watch_cycle=watcher.cycle,
+    )
+
+
+@pytest.fixture
+async def client(tmp_path: Path) -> AsyncGenerator[httpx.AsyncClient]:
+    workflows = Workflows(tmp_path / "loop-reviewer", {})
+    watcher = workflows.inbox_watch(monotonic=lambda: 0)
+    transport = httpx.ASGITransport(app=_app(workflows, watcher))
+    async with httpx.AsyncClient(transport=transport, base_url=_ORIGIN) as session:
+        yield session
+
+
+async def test_saved_edit_can_be_returned_during_publication_history_failure(
+    client: httpx.AsyncClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = SqliteReviewRunStore(tmp_path / "loop-reviewer" / "reviews.sqlite3")
+    selection = ReviewSelection(
+        PullRequestRef("github.com", "org", "repo", 1, 42),
+        "reviewer",
+        "teammate",
+        ReviewedRevision("main", "a" * 40, "b" * 40, "c" * 40),
+    )
+    saved = store.start(selection, replaces=None).finish(
+        ReviewDraft("approved", "Original", ())
+    )
+    store.save(saved)
+
+    def unavailable(_history: ReviewHistory, _run_id: int) -> None:
+        raise ReviewStoreError("Publication history unavailable.")
+
+    url = f"/api/v1/drafts/{saved.id}"
+    with monkeypatch.context() as patch:
+        patch.setattr(ReviewHistory, "unconfirmed_for", unavailable)
+        response = await client.patch(
+            url,
+            json={"version": "1", "kind": "edit_summary", "text": "Saved edit"},
+            headers=_HEADERS,
+        )
+    assert response.status_code == 200
+    assert response.json()["version"] == "2"
+    assert (await client.get(url, headers=_HEADERS)).json() == response.json()
+
+
+@pytest.mark.parametrize("action", ["confirm", "recover", "retry"])
+async def test_publication_command_maps_unknown_preview_to_not_found(
+    client: httpx.AsyncClient, action: str
+) -> None:
+    response = await client.post(
+        f"/api/v1/publications/66206015-5d37-4d21-8bf2-10d48d043413/{action}",
+        headers=_HEADERS,
+        json={"acceptDuplicateRisk": False} if action == "retry" else None,
+    )
+    assert response.status_code == 404
+    assert response.json()["code"] == "not_found"
+
+
+async def test_requires_capability_host_and_write_origin(
+    client: httpx.AsyncClient,
+) -> None:
+    unauthorized = await client.get("/api/v1/inbox")
+    assert unauthorized.status_code == 401
+    wrong_host = await client.get(
+        "/api/v1/inbox", headers={**_HEADERS, "Host": "bad.invalid"}
+    )
+    assert wrong_host.status_code == 403
+    cross_origin = await client.post(
+        "/api/v1/inbox/scan", headers={**_HEADERS, "Origin": "https://bad.invalid"}
+    )
+    assert cross_origin.status_code == 403
+    assert "access-control-allow-origin" not in cross_origin.headers
+    valid = await client.get("/api/v1/inbox", headers=_HEADERS)
+    assert valid.json() == {"kind": "unconfigured"}
+    assert valid.headers["cache-control"] == "no-store"
+    assert valid.headers["referrer-policy"] == "no-referrer"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"version": 1, "kind": "edit_summary", "text": "Saved locally"},
+        {"version": "1", "kind": "edit_summary", "text": "🌿" * 16385},
+        {"version": "0", "kind": "drop_finding", "number": 1},
+        {"version": "1", "kind": "drop_finding", "number": True},
+        {
+            "version": "1",
+            "kind": "drop_finding",
+            "number": 1,
+            "unexpected": "private data",
+        },
+    ],
+    ids=[
+        "version-number",
+        "decoded-size",
+        "zero-version",
+        "boolean-position",
+        "extra-field",
+    ],
+)
+async def test_invalid_patch_returns_typed_error(
+    client: httpx.AsyncClient, data: dict[str, object]
+) -> None:
+    response = await client.patch("/api/v1/drafts/1", json=data, headers=_HEADERS)
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_input"
+    assert "private data" not in response.text
+
+
+async def test_setup_applies_one_project_to_multiple_repositories(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    urls = ["https://github.com/org/first", "https://github.com/org/second"]
+
+    def verify(_self: object, address: RepositoryAddress) -> WatchedRepository:
+        if address.slug == "org/unavailable":
+            raise RepositoryDiscoveryError("Repository unavailable")
+        return WatchedRepository(address, urls.index(address.url) + 1, "alice")
+
+    def discover(
+        _self: object, repo: WatchedRepository
+    ) -> tuple[DiscoveredPullRequest, ...]:
+        return tuple(
+            DiscoveredPullRequest(
+                PullRequestRef.from_repository(
+                    repo.address.host,
+                    repo.address.slug,
+                    number,
+                    repository_id=repo.repository_id,
+                ),
+                f"[{key}-1] Check",
+                "bob",
+                "open",
+                False,
+                (),
+            )
+            for number, key in enumerate(("ABC", "XYZ", "OTHER"), 1)
+        )
+
+    monkeypatch.setattr(composition.GhRepositoryDiscovery, "verify", verify)
+    monkeypatch.setattr(composition.GhRepositoryDiscovery, "list_open", discover)
+    url = "/api/v1/inbox/configuration"
+    empty = await client.get(url, headers=_HEADERS)
+    assert empty.json() == {
+        "settingsVersion": None,
+        "jiraProjectKeys": [],
+        "repositoryUrls": [],
+    }
+    body: dict[str, object] = {
+        "settingsVersion": None,
+        "jiraProjectKeys": [" abc "],
+        "repositoryUrls": urls,
+    }
+    saved = await client.post(url, json=body, headers=_HEADERS)
+    assert saved.status_code == 200
+    settings = saved.json()
+    assert settings == {
+        "settingsVersion": "1",
+        "jiraProjectKeys": ["ABC"],
+        "repositoryUrls": urls,
+    }
+    stale = await client.post(url, json=body, headers=_HEADERS)
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "inbox_changed"
+    body["settingsVersion"] = "1"
+    extra_project = await client.post(
+        url, json={**body, "jiraProjectKeys": ["ABC", "XYZ"]}, headers=_HEADERS
+    )
+    assert extra_project.status_code == 422
+    failed = await client.post(
+        url,
+        json={
+            **body,
+            "repositoryUrls": [urls[0], "https://github.com/org/unavailable"],
+        },
+        headers=_HEADERS,
+    )
+    assert failed.status_code == 502
+    assert (await client.get(url, headers=_HEADERS)).json() == settings
+
+    scanned = await client.post("/api/v1/inbox/scan", headers=_HEADERS)
+    assert scanned.status_code == 200
+    report = scanned.json()
+    assert report["prefix"] == "[ABC-…]"
+    assert [(row["repository"], row["reasons"]) for row in report["active"]] == [
+        (repo, ["Matches [ABC-…]"]) for repo in ("org/first", "org/second")
+    ]
+
+    updated = await client.post(
+        url,
+        json={**settings, "jiraProjectKeys": ["XYZ"], "repositoryUrls": urls[1:]},
+        headers=_HEADERS,
+    )
+    assert updated.json() == {
+        "settingsVersion": "2",
+        "jiraProjectKeys": ["XYZ"],
+        "repositoryUrls": urls[1:],
+    }
+    rescanned = await client.post("/api/v1/inbox/scan", headers=_HEADERS)
+    assert [row["title"] for row in rescanned.json()["active"]] == ["[XYZ-1] Check"]
+
+
+async def test_reconfigured_inbox_rejects_old_row_and_preserves_partial_results(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inbox = SqliteInboxStore(tmp_path / "loop-reviewer" / "reviews.sqlite3")
+    first = WatchedRepository(RepositoryAddress("github.com", "org/repo"), 42, "alice")
+    second = WatchedRepository(
+        RepositoryAddress("github.com", "org/other"), 43, "alice"
+    )
+    ref = PullRequestRef("github.com", "org", "repo", 1, 42)
+    row = DiscoveredPullRequest(ref, "[ABC-1] Check", "bob", "open", False, ())
+    existing = inbox.replace_settings((JiraProjectKey("ABC"),), (first, second))
+
+    def discover(
+        _self: object, repo: WatchedRepository
+    ) -> tuple[DiscoveredPullRequest, ...]:
+        if repo == second:
+            raise RepositoryDiscoveryError("Repository unavailable")
+        return (row,)
+
+    monkeypatch.setattr(composition.GhRepositoryDiscovery, "list_open", discover)
+    before = await client.get("/api/v1/inbox", headers=_HEADERS)
+    assert [repo["status"] for repo in before.json()["repositories"]] == [
+        "pending",
+        "pending",
+    ]
+    scanned = await client.post("/api/v1/inbox/scan", headers=_HEADERS)
+    assert scanned.status_code == 200
+    report = scanned.json()
+    assert [repo["status"] for repo in report["repositories"]] == ["success", "failed"]
+    stale = {
+        "url": ref.url,
+        "settingsVersion": str(existing.version),
+        "identity": report["active"][0]["identity"],
+    }
+    inbox.replace_settings((JiraProjectKey("ABC"),), (first, second))
+    await client.post("/api/v1/inbox/scan", headers=_HEADERS)
+    for action in ("open", "later", "restore"):
+        result = await client.post(
+            f"/api/v1/inbox/{action}", json=stale, headers=_HEADERS
+        )
+        assert result.status_code == 409
+        assert result.json()["code"] == "inbox_changed"
+
+
+async def test_cli_and_http_edit_share_version_and_exact_publication(
+    client: httpx.AsyncClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "loop-reviewer" / "reviews.sqlite3"
+    store = SqliteReviewRunStore(path)
+    ref = PullRequestRef("github.com", "org", "repo", 1, 42)
+    revision = ReviewedRevision("main", "a" * 40, "b" * 40, "c" * 40)
+    selection = ReviewSelection(ref, "reviewer", "teammate", revision)
+    store.start(replace(selection, account="other"), replaces=None)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute(
+            "UPDATE sqlite_sequence SET seq = 9007199254740992 WHERE name = 'review_runs'"
+        )
+    saved = store.start(selection, replaces=None).finish(
+        ReviewDraft("approved", "Original", ())
+    )
+    store.save(saved)
+    assert saved.id == 9007199254740993
+    url = f"/api/v1/drafts/{saved.id}"
+
+    original = await client.get(url, headers=_HEADERS)
+    assert original.status_code == 200
+    assert original.json()["runId"] == str(saved.id)
+    edit = tmp_path / "feedback.txt"
+    edit.write_bytes(b"Edited from CLI.\r\n")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "loop-reviewer",
+            "draft",
+            "edit-summary",
+            str(saved.id),
+            "--version",
+            "1",
+            "--file",
+            str(edit),
+        ],
+    )
+    assert cli.main() == 0
+    conflicted = await client.patch(
+        url,
+        json={"version": "1", "kind": "edit_summary", "text": "Stale browser edit"},
+        headers=_HEADERS,
+    )
+    assert conflicted.status_code == 409
+    assert conflicted.json()["code"] == "draft_changed"
+    changed = await client.patch(
+        url,
+        json={
+            "version": "2",
+            "kind": "edit_summary",
+            "text": "Saved on the web.\r\nSecond line.",
+        },
+        headers=_HEADERS,
+    )
+    assert changed.status_code == 200
+    assert changed.json()["version"] == "3"
+    assert (await client.get(f"{url}/copy", headers=_HEADERS)).json()[
+        "markdown"
+    ] == "Saved on the web.\nSecond line."
+
+    class RecoveringPublication(FakePublication):
+        @override
+        def submit(self, _preview: PublicationPreview) -> Literal["unknown"]:
+            return "unknown"
+
+        def reconcile(
+            self, preview: PublicationPreview, *, ref: PullRequestRef
+        ) -> PublicationReceipt:
+            assert preview.id.marker in preview.body
+            assert ref.url == preview.selection.ref.url
+            return PublicationReceipt(71, "comment")
+
+    def session(
+        _env: dict[str, str], _host: str, *, inherited_fd: int | None = None
+    ) -> nullcontext[RecoveringPublication]:
+        return nullcontext(RecoveringPublication())
+
+    monkeypatch.setattr(composition, "open_gh_publication", session)
+    prepared = await client.post(
+        f"{url}/publication-preview",
+        json={"version": "3", "action": "comment"},
+        headers=_HEADERS,
+    )
+    assert prepared.status_code == 200
+    preview = prepared.json()
+    id = preview["id"]
+    snapshot = await client.get(f"/api/v1/publications/{id}", headers=_HEADERS)
+    assert snapshot.json()["preview"] == preview
+    assert (
+        preview["body"]
+        == f"<!-- loop-reviewer:{id} -->\n\nSaved on the web.\nSecond line."
+    )
+    assert (
+        await client.post(f"/api/v1/publications/{id}/confirm", headers=_HEADERS)
+    ).json()["status"] == "unconfirmed"
+    pending = await client.get("/api/v1/publications/unconfirmed", headers=_HEADERS)
+    assert [record["preview"]["id"] for record in pending.json()] == [id]
+    assert (await client.get(url, headers=_HEADERS)).json()["publicationId"] == id
+    recovered = await client.post(
+        f"/api/v1/publications/{id}/recover", headers=_HEADERS
+    )
+    assert recovered.json()["status"] == "published"
+    history = await client.get(f"/api/v1/history/{saved.id}", headers=_HEADERS)
+    assert history.json()["receipt"]["reviewId"] == "71"
+    assert history.json()["selection"] == preview["selection"]
+    assert (await client.get(url, headers=_HEADERS)).json()["completedRunId"] == str(
+        saved.id
+    )
+
+
+async def test_concurrent_opens_share_review_lock(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = Event()
+    release = Event()
+
+    def review(_self: FakeReviewer, _selection: ReviewSelection) -> ReviewDraft:
+        entered.set()
+        assert release.wait(5)
+        return ReviewDraft("approved", "Generated once", ())
+
+    monkeypatch.setattr(composition, "open_gh_environment", fake_gh_environment)
+    monkeypatch.setattr(composition, "GhPullRequestReader", FakeReader)
+    monkeypatch.setattr(composition, "PiReviewer", FakeReviewer)
+    monkeypatch.setattr(FakeReviewer, "review", review)
+
+    async def open_review() -> httpx.Response:
+        return await client.post(
+            "/api/v1/reviews/open",
+            json={"url": "https://github.com/org/repo/pull/1", "retry": False},
+            headers=_HEADERS,
+        )
+
+    first = asyncio.create_task(open_review())
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        concurrent = await open_review()
+        assert concurrent.json() == {"kind": "unavailable", "reason": "in_progress"}
+    finally:
+        release.set()
+        original = await first
+    resumed = await open_review()
+    assert original.json()["status"] == "generated"
+    assert resumed.json()["status"] == "resumed"
+    assert original.json()["draft"] == resumed.json()["draft"]
+
+
+@pytest.mark.parametrize(
+    ("content", "content_type", "expected_status", "code"),
+    [
+        (b'{"version":"1"}', "text/plain", 415, "unsupported_media_type"),
+        (b"{not-json", "application/json", 422, "invalid_input"),
+        (
+            b'{"text":"' + b"\\u0061" * 140_000 + b'"}',
+            "application/json",
+            413,
+            "body_too_large",
+        ),
+    ],
+    ids=["non-json-media", "malformed-json", "escaped-body-limit"],
+)
+async def test_mutation_envelope_before_parsing(
+    client: httpx.AsyncClient,
+    content: bytes,
+    content_type: str,
+    expected_status: int,
+    code: str,
+) -> None:
+    result = await client.patch(
+        "/api/v1/drafts/1",
+        headers={**_HEADERS, "Content-Type": content_type},
+        content=content,
+    )
+    assert result.status_code == expected_status
+    assert result.json()["code"] == code
+    assert result.headers["cache-control"] == "no-store"
+
+
+def test_last_loopback_stream_disconnect_releases_browser_membership(
+    tmp_path: Path,
+) -> None:
+    workflows = Workflows(tmp_path, {})
+    watcher = workflows.inbox_watch(monotonic=lambda: 0)
+    ready = Event()
+
+    def ready_browser(_url: str) -> bool:
+        ready.set()
+        return True
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        origin = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        server = BrowserServer(
+            _app(workflows, watcher, origin=origin),
+            origin,
+            "test-capability",
+            ready_browser,
+        )
+        thread = Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread.start()
+        try:
+            assert ready.wait(5)
+            with httpx.Client(
+                base_url=origin, headers=_HEADERS, timeout=5, trust_env=False
+            ) as connection:
+                path = "/api/v1/inbox/watch"
+                with connection.stream("GET", path) as first:
+                    first_events = first.iter_lines()
+                    assert next(first_events) == '{"event":"ready"}'
+                    with connection.stream("GET", path) as second:
+                        second_events = second.iter_lines()
+                        assert next(second_events) == '{"event":"ready"}'
+                        assert watcher.cycle() is not None
+                    assert watcher.cycle() is not None
+                deadline = monotonic() + 5
+                while watcher.cycle() is not None and monotonic() < deadline:
+                    sleep(0.01)
+                assert watcher.cycle() is None
+                with connection.stream("GET", path) as active:
+                    active_events = active.iter_lines()
+                    assert next(active_events) == '{"event":"ready"}'
+                    server.should_exit = True
+                    thread.join(timeout=5)
+                    assert not thread.is_alive()
+                    assert watcher.cycle() is None
+        finally:
+            server.should_exit = True
+            thread.join(timeout=5)

@@ -1,0 +1,9 @@
+# Share one local inbox between the browser and CLI
+
+A developer can start a one-off review by supplying an open, non-draft GitHub PR URL. Check access to that PR using its host and the developer’s authenticated account. A one-off works before discovery setup, requires no Jira prefix and leaves the watch list unchanged. Reopening the same PR from a URL or the inbox resumes its existing review.
+
+For recurring discovery, setup verifies that the account can list PRs in each selected repository before saving it. Discovery uses the [eligibility rules](../../GLOSSARY.md). Each developer has an independent inbox and can review a PR that a teammate has already reviewed.
+
+`loop-reviewer ui` opens the local web UI and starts discovery. `loop-reviewer watch` polls from the terminal. Both scan immediately on launch and every two minutes afterward. “Scan now” in the UI and `loop-reviewer scan` in the CLI let the developer force a fresh check. Polling stops when the last watcher closes. Show the applied Jira prefix and last successful scan for each repository. A failed check shows its own error while the others continue, so an empty result can be distinguished from a failed scan.
+
+Show each PR’s title, repository, author, review status and reason for appearing. Put “Your review was requested” first. Other reasons include “Your PR,” a match for the configured project, and, once follow-up ships, “New commits since your review.” Inbox actions include starting or resuming a draft, choosing “Later,” and opening the PR on GitHub. History shows the reviewed revision, verdict and publication status. The browser and CLI share decisions, drafts and history so either can resume the work.

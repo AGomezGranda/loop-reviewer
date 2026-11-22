@@ -1,0 +1,15 @@
+{
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"files": {
+		"includes": [
+			"**",
+			"!!dist",
+			"!src/api/schema.d.ts",
+			"!!test-results",
+			"!!playwright-report"
+		]
+	},
+	"css": {
+		"parser": { "tailwindDirectives": true }
+	}
+}

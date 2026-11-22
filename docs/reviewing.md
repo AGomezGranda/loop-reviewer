@@ -1,0 +1,45 @@
+# Review a pull request
+
+Follow the [quickstart](../README.md#quickstart) to install the tool. In these examples, run `loop-reviewer` from the installed environment. From the checkout, prefix the commands with `mise exec -- uv run --locked`; after setup you can also invoke `venv/bin/loop-reviewer` by absolute path from another directory.
+
+## Open or resume a private draft
+
+**Browser:** Run `loop-reviewer ui`, paste a PR URL, and select **Open review**. If the browser doesn’t open automatically, use the launch link printed in the terminal. The session survives a page refresh; start a new `loop-reviewer ui` session for another browser. Press Ctrl-C in the launching terminal to stop the server after in-flight work settles. Keep the launch link private: it grants access to the local workspace.
+
+**CLI:** Replace the sample URL with an open, non-draft PR you can access:
+
+```sh
+PR_URL=https://github.com/OWNER/REPO/pull/123
+loop-reviewer open "$PR_URL"    # Inspect the selected revision without generating a draft.
+loop-reviewer review "$PR_URL"  # Generate or resume a private draft.
+```
+
+Neither operation posts to GitHub. You don’t need an [inbox](inbox.md) to review a PR by URL. Selecting or reviewing uses the standard GitHub API endpoint for the PR host, not custom `gh` `api_host` overrides. Each selection uses a single captured GitHub credential.
+
+A draft is pinned to the target branch, merge base, and head commit. Reopening the same current comparison under the same GitHub account resumes the saved draft without running Pi or checking its configuration, but still needs access to the PR on GitHub. If the PR advances before completion, reopening can start a separate draft for the new comparison. The old draft remains pinned to its revision and accessible by run ID. There’s no draft list.
+
+Use **Retry review** when the browser offers it, or `loop-reviewer review --retry "$PR_URL"`, to replace a failed or interrupted attempt for the same comparison. If the comparison itself was unsupported, run `review` without `--retry` once a supported revision is available. If the CLI says it saved a draft but couldn’t check history, use the printed `draft show RUN_ID` command to check its status.
+
+## Edit or copy feedback
+
+In the browser, edit the draft before you choose **Copy feedback**, finish locally, or [preview a publication](publishing.md). In the CLI, use the run ID and draft version shown in the preview. For example, for run `42` starting at version `1`:
+
+```sh
+loop-reviewer draft show 42
+loop-reviewer draft edit-summary 42 --version 1 --file summary.txt
+loop-reviewer draft edit-finding 42 1 --version 2 --condition-file condition.txt
+loop-reviewer draft drop-finding 42 2 --version 3
+loop-reviewer draft copy 42
+```
+
+Each successful edit prints the saved preview and increments its version. Finding numbers are positions in that preview; use the latest numbering and version. If a command reports a stale version, run `draft show` again before retrying.
+
+The CLI’s edit inputs must be regular UTF-8 files of at most 64 KiB per field. It accepts LF and CRLF and saves LF. Keep the files private and delete them when no longer needed. `draft copy` writes Markdown to stdout, not to your clipboard; pipe or redirect it only to a destination you trust. Draft commands work offline without `gh` or Pi.
+
+## Finish privately or publish
+
+Copy any feedback you want to take elsewhere **before** finishing. To record a private completion, select **Finish locally** or run `loop-reviewer draft finish 42 --version 4` after the example edits. This never posts to GitHub and can finish an older pinned draft. If you want to send feedback to GitHub instead, [preview and confirm a publication](publishing.md) without finishing locally first.
+
+A local finish or successful publication completes the initial review for the whole PR under the saved GitHub account. Other drafts for that PR and account are no longer editable or available via `draft show` or `draft copy`. A later push, retarget, or closure does not start another initial review, even with `--retry`. Follow-up verification of earlier findings is not implemented.
+
+Use **History** in the browser to see the reviewed revision and final feedback, with a GitHub receipt if published. In the CLI, run `loop-reviewer review "$PR_URL"` again; it shows completion history instead of generating a draft. This needs readable PR metadata under the same account, but not Pi.

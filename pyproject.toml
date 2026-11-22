@@ -1,0 +1,65 @@
+[project]
+name = "loop-reviewer"
+version = "0.1.0"
+requires-python = ">=3.15"
+dependencies = [
+    "fastapi>=0.165.0",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+loop-reviewer = "loop_reviewer.cli:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "import-linter>=2.16",
+    "pyrefly",
+    "pytest",
+    "ruff",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.9,<0.14"]
+build-backend = "uv_build"
+
+[tool.ruff.lint]
+extend-select = ["TID251"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/loop_reviewer/local_http/app.py" = ["TID251"]
+"src/loop_reviewer/local_http/serve.py" = ["TID251"]
+"src/loop_reviewer/composition.py" = ["TID251"]
+"src/loop_reviewer/cli/__init__.py" = ["TID251"]
+"src/loop_reviewer/integrations/**/*.py" = ["TID251"]
+"tests/**/*.py" = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"os" = { msg = "Inject filesystem and process capabilities into the review core." }
+"pathlib" = { msg = "Keep filesystem access at the boundary." }
+"shutil" = { msg = "Keep filesystem and process access at the boundary." }
+"sqlite3" = { msg = "Access review state through a review store contract." }
+"subprocess" = { msg = "Inject process capabilities into the review core." }
+"fcntl" = { msg = "Use the review execution port for locking." }
+"tempfile" = { msg = "Keep temporary resources at the boundary." }
+"socket" = { msg = "Inject network capabilities into the review core." }
+"urllib.request" = { msg = "Inject network capabilities into the review core." }
+"http.client" = { msg = "Inject network capabilities into the review core." }
+"time" = { msg = "Inject a clock into the review core." }
+"datetime.datetime.now" = { msg = "Inject a clock into the review core." }
+"datetime.datetime.today" = { msg = "Inject a clock into the review core." }
+"datetime.datetime.utcnow" = { msg = "Inject a clock into the review core." }
+"datetime.date.today" = { msg = "Inject a clock into the review core." }
+"random" = { msg = "Inject randomness into the review core." }
+"secrets" = { msg = "Inject randomness into the review core." }
+"uuid.uuid4" = { msg = "Inject ID generation into the review core." }
+"uuid.uuid7" = { msg = "Inject ID generation into the review core." }
+"builtins.open" = { msg = "Inject filesystem capabilities into the review core." }
+
+[tool.pyrefly]
+preset = "strict"
+search_path = ["src", "."]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
