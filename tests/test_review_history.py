@@ -4,7 +4,12 @@ from uuid import uuid4
 
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
 from loop_reviewer.review.history import ReviewHistory
-from loop_reviewer.review.model import ReviewDraft, ReviewRun, ReviewSelection
+from loop_reviewer.review.model import (
+    GeneratedReview,
+    ReviewDraft,
+    ReviewRun,
+    ReviewSelection,
+)
 from loop_reviewer.review.publication_model import PublicationId, build_preview
 from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
 
@@ -18,7 +23,9 @@ _SELECTION = ReviewSelection(
 
 def _draft(store: SqliteReviewRunStore, selection: ReviewSelection) -> ReviewRun:
     run = store.start(selection, replaces=None).finish(
-        ReviewDraft("approved", "Saved feedback", ())
+        GeneratedReview(
+            ReviewDraft("approved", "Saved feedback", ()), "provider/model", None
+        )
     )
     store.save(run)
     return run

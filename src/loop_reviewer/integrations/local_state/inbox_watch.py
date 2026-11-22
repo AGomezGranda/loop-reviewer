@@ -10,10 +10,14 @@ from tempfile import NamedTemporaryFile
 from time import monotonic as clock
 from uuid import uuid4
 
-from loop_reviewer.inbox.discovery import InboxNotConfigured, ScanSuperseded
+from loop_reviewer.inbox.discovery import (
+    InboxNotConfigured,
+    RepositoryDiscoveryError,
+    ScanSuperseded,
+)
 from loop_reviewer.inbox.model import InboxReport
 from loop_reviewer.inbox.polling import ScanCycle, ScanOutcome, next_deadline
-from loop_reviewer.inbox.store import InboxStoreError
+from loop_reviewer.inbox.store import InboxSettingsChanged, InboxStoreError
 from loop_reviewer.integrations.local_state.posix_lock import (
     LocalLockError,
     private_lock,
@@ -82,6 +86,8 @@ class InboxWatch:
                     except (
                         InboxNotConfigured,
                         ScanSuperseded,
+                        InboxSettingsChanged,
+                        RepositoryDiscoveryError,
                         InboxStoreError,
                         ReviewStoreError,
                     ):
@@ -94,10 +100,10 @@ class InboxWatch:
         except InboxNotConfigured:
             outcome = "unconfigured"
             raise
-        except ScanSuperseded:
+        except ScanSuperseded, InboxSettingsChanged:
             outcome = "superseded"
             raise
-        except InboxStoreError, ReviewStoreError:
+        except InboxStoreError, RepositoryDiscoveryError, ReviewStoreError:
             outcome = "error"
             raise
         else:

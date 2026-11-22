@@ -7,11 +7,11 @@ from fastapi import APIRouter
 from pydantic import Field
 
 from loop_reviewer.inbox.actions import InboxActions
-from loop_reviewer.inbox.discovery import ConfigureInbox, InboxNotConfigured
+from loop_reviewer.inbox.configuration import ConfigureLocal, LocalSettings
+from loop_reviewer.inbox.discovery import InboxNotConfigured
 from loop_reviewer.inbox.model import (
     InboxReport,
     InboxRow,
-    InboxSettings,
     JiraProjectKey,
     RepositoryAddress,
     RepositoryScanStatus,
@@ -45,21 +45,27 @@ class ConfigureInboxRequest(RequestModel):
     settings_version: SQLiteId | None
     jira_project_keys: list[str]
     repository_urls: list[str]
+    config_revision: str
+    reviewer_model: str | None = None
 
 
 class InboxConfiguration(ResponseModel):
     settings_version: SQLiteId | None
     jira_project_keys: list[str]
     repository_urls: list[str]
+    config_revision: str
+    reviewer_model: str | None
 
     @classmethod
-    def from_settings(cls, settings: InboxSettings | None) -> InboxConfiguration:
-        if settings is None:
-            return cls(settings_version=None, jira_project_keys=[], repository_urls=[])
+    def from_settings(cls, settings: LocalSettings) -> InboxConfiguration:
         return cls(
-            settings_version=str(settings.version),
+            settings_version=str(settings.version)
+            if settings.version is not None
+            else None,
             jira_project_keys=[project.value for project in settings.projects],
-            repository_urls=[repo.address.url for repo in settings.repositories],
+            repository_urls=[address.url for address in settings.addresses],
+            config_revision=settings.revision,
+            reviewer_model=settings.model,
         )
 
 
@@ -186,7 +192,7 @@ def _report(read: Callable[[], InboxReport]) -> InboxResponse:
 def routes(
     read: Callable[[], InboxReport],
     scan: Callable[[], InboxReport],
-    configure: ConfigureInbox,
+    configure: ConfigureLocal,
     actions: InboxActions[ReviewOutcome],
     history: ReviewHistory,
     watch: BrowserWatch,
@@ -209,7 +215,11 @@ def routes(
                 RepositoryAddress.from_url(url) for url in body.repository_urls
             )
             settings = configure.run(
-                projects, addresses, expected_version=int(body.settings_version or 0)
+                projects,
+                addresses,
+                expected_version=int(body.settings_version or 0),
+                expected_revision=body.config_revision,
+                model=body.reviewer_model,
             )
         except ValueError as error:
             raise ApiError(422, "invalid_input", str(error)) from None

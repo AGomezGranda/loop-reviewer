@@ -6,7 +6,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from loop_reviewer.inbox.actions import InboxActions
+from loop_reviewer.inbox.configuration import LocalConfigurationError
 from loop_reviewer.inbox.discovery import ConfigureInbox, ReadInbox, ScanInbox
+from loop_reviewer.inbox.model import InboxReport
 from loop_reviewer.integrations.git_comparison import GitComparison
 from loop_reviewer.integrations.github import GhPullRequestReader
 from loop_reviewer.integrations.github_credentials import open_gh_environment
@@ -19,9 +21,15 @@ from loop_reviewer.integrations.local_state.sqlite_inbox import SqliteInboxStore
 from loop_reviewer.integrations.local_state.sqlite_reviews import (
     SqliteReviewRunStore,
 )
+from loop_reviewer.integrations.local_state.toml_settings import TomlSettings
 from loop_reviewer.integrations.pi_reviewer import PiReviewer
 from loop_reviewer.review.drafts import EditReviewDraft
-from loop_reviewer.review.generate import Reviewer, ReviewOutcome, ReviewPullRequest
+from loop_reviewer.review.generate import (
+    Reviewer,
+    ReviewerError,
+    ReviewOutcome,
+    ReviewPullRequest,
+)
 from loop_reviewer.review.history import ReviewHistory
 from loop_reviewer.review.model import ReviewIdentity, ReviewSelection
 from loop_reviewer.review.publication import PreparePublication, PublishReview
@@ -31,10 +39,18 @@ from loop_reviewer.review.selection import open_pull_request
 
 
 class Workflows:
-    def __init__(self, state: Path, environment: dict[str, str]) -> None:
+    def __init__(
+        self, state: Path, environment: dict[str, str], *, config_path: Path
+    ) -> None:
         self._state = state
         self._environment = environment
         self._database = state / "reviews.sqlite3"
+        store = SqliteInboxStore(self._database)
+        self._config = TomlSettings(
+            config_path,
+            ConfigureInbox(GhRepositoryDiscovery(environment), store),
+            store,
+        )
 
     def select(self, ref: PullRequestRef) -> ReviewSelection:
         with open_gh_environment(
@@ -55,9 +71,16 @@ class Workflows:
         ) as (pinned, _):
 
             def reviewer_factory(descriptor: int) -> Reviewer:
+                try:
+                    model = (
+                        environment.get("LOOP_REVIEWER_PI_MODEL")
+                        or self._config.model()
+                    )
+                except LocalConfigurationError as error:
+                    raise ReviewerError(str(error), "setup") from None
                 return PiReviewer(
                     GitComparison(pinned, inherited_fd=descriptor).read,
-                    environment.get("LOOP_REVIEWER_PI_MODEL") or None,
+                    model,
                     environment,
                     inherited_fd=descriptor,
                 )
@@ -95,31 +118,32 @@ class Workflows:
         )
         return PublishReview(SqliteReviewRunStore(self._database), guard)
 
-    def configure_inbox(self) -> ConfigureInbox:
-        return ConfigureInbox(
-            GhRepositoryDiscovery(self._environment), SqliteInboxStore(self._database)
-        )
+    def configure_inbox(self) -> TomlSettings:
+        return self._config
 
-    def scan_inbox(self) -> ScanInbox:
+    def scan_inbox(self) -> InboxReport:
+        self._config.sync_inbox()
         return ScanInbox(
             GhRepositoryDiscovery(self._environment),
             SqliteInboxStore(self._database),
             SqliteReviewRunStore(self._database),
             now=lambda: datetime.now(UTC),
-        )
+        ).run()
 
     def inbox_watch(self, *, monotonic: Callable[[], float]) -> InboxWatch:
         return InboxWatch(
-            self._state / "inbox-watch", self.scan_inbox().run, monotonic=monotonic
+            self._state / "inbox-watch", self.scan_inbox, monotonic=monotonic
         )
 
-    def read_inbox(self) -> ReadInbox:
+    def read_inbox(self) -> InboxReport:
+        self._config.sync_inbox()
         return ReadInbox(
             SqliteInboxStore(self._database), SqliteReviewRunStore(self._database)
-        )
+        ).run()
 
     def inbox_actions(self) -> InboxActions[ReviewOutcome]:
         return InboxActions(
             SqliteInboxStore(self._database),
             lambda ref, identity: self.review(ref, expected_identity=identity),
+            refresh_settings=self._config.sync_inbox,
         )

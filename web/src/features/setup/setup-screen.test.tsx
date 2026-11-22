@@ -18,6 +18,8 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 	const second = "https://github.com/org/second";
 	const initial = {
 		settingsVersion: "1",
+		configRevision: "original",
+		reviewerModel: "provider/first",
 		jiraProjectKeys: ["ABC"],
 		repositoryUrls: [first],
 	};
@@ -29,6 +31,8 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 			if (init.method === "GET") return Response.json(initial);
 			expect(JSON.parse(String(init.body))).toEqual({
 				settingsVersion: "1",
+				configRevision: "original",
+				reviewerModel: "provider/updated",
 				jiraProjectKeys: ["xyz"],
 				repositoryUrls: [first, second],
 			});
@@ -40,6 +44,8 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 			}
 			return Response.json({
 				settingsVersion: "2",
+				configRevision: "saved",
+				reviewerModel: "provider/updated",
 				jiraProjectKeys: ["XYZ"],
 				repositoryUrls: [first, second],
 			});
@@ -57,6 +63,10 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 	const repositories = screen.getByLabelText("Repository URL 1");
 	expect(projects).toHaveProperty("value", "ABC");
 	expect(repositories).toHaveProperty("value", first);
+	const model = screen.getByLabelText("Pi reviewer model");
+	expect(model).toHaveProperty("value", "provider/first");
+	await user.clear(model);
+	await user.type(model, "provider/updated");
 	await user.clear(projects);
 	await user.type(projects, " xyz ");
 	await user.click(screen.getByRole("button", { name: "Add repository" }));
@@ -84,6 +94,8 @@ test("uses refreshed settings while pristine and explicitly reloads after an edi
 	const repositoryUrls = ["https://github.com/org/first"];
 	let current = {
 		settingsVersion: "2",
+		configRevision: "current",
+		reviewerModel: null,
 		jiraProjectKeys: ["NEW"],
 		repositoryUrls,
 	};
@@ -93,8 +105,8 @@ test("uses refreshed settings while pristine and explicitly reloads after an edi
 		vi.fn(async (_url: string, init: RequestInit) => {
 			if (init.method === "GET") return Response.json(current);
 			const body = JSON.parse(String(init.body));
-			sent.push(body.settingsVersion);
-			if (body.settingsVersion !== current.settingsVersion) {
+			sent.push(body.configRevision);
+			if (body.configRevision !== current.configRevision) {
 				return Response.json(
 					{ code: "inbox_changed", message: "Settings changed." },
 					{ status: 409 },
@@ -103,6 +115,7 @@ test("uses refreshed settings while pristine and explicitly reloads after an edi
 			current = {
 				...current,
 				settingsVersion: "4",
+				configRevision: "saved",
 				jiraProjectKeys: body.jiraProjectKeys,
 			};
 			return Response.json(current);
@@ -112,6 +125,7 @@ test("uses refreshed settings while pristine and explicitly reloads after an edi
 	cache.setQueryData(["inbox-configuration"], {
 		...current,
 		settingsVersion: "1",
+		configRevision: "old",
 		jiraProjectKeys: ["OLD"],
 	});
 	render(
@@ -124,7 +138,11 @@ test("uses refreshed settings while pristine and explicitly reloads after an edi
 	await waitFor(() => expect(project).toHaveProperty("value", "NEW"));
 	await user.clear(project);
 	await user.type(project, "MINE");
-	current = { ...current, settingsVersion: "3", jiraProjectKeys: ["OTHER"] };
+	current = {
+		...current,
+		configRevision: "external",
+		jiraProjectKeys: ["OTHER"],
+	};
 	const save = screen.getByRole("button", { name: "Save settings" });
 	await user.click(save);
 	const reload = await screen.findByRole("button", {
@@ -138,5 +156,5 @@ test("uses refreshed settings while pristine and explicitly reloads after an edi
 	await user.type(project, "MINE");
 	await user.click(save);
 	await screen.findByText("Watching 1 repository for MINE.");
-	expect(sent).toEqual(["2", "3"]);
+	expect(sent).toEqual(["current", "external"]);
 });

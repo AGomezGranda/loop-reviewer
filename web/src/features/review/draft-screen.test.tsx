@@ -43,6 +43,8 @@ const draft: Draft = {
 		],
 	},
 	publicationId: null,
+	generationModel: null,
+	estimatedCostUsd: null,
 };
 
 beforeEach(() => sessionStorage.setItem("loop-reviewer.capability", "test"));
@@ -85,6 +87,24 @@ function mount(
 	);
 	return router;
 }
+
+test.each([
+	[0.023456, "Estimated generation cost · $0.0235"],
+	[0.000001, "Estimated generation cost · < $0.0001"],
+	[0, "Estimated generation cost · $0.0000"],
+	[null, "Cost unavailable"],
+])("displays the saved estimate %s", async (estimatedCostUsd, label) => {
+	const generationModel = estimatedCostUsd === null ? null : "provider/model";
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () =>
+			Response.json({ ...draft, generationModel, estimatedCostUsd }),
+		),
+	);
+	mount();
+	await screen.findByText(label);
+	if (generationModel) await screen.findByText(generationModel);
+});
 
 test("a conflicting edit retains the input and requires selection at the new version", async () => {
 	const second = { ...draft.feedback.findings[1], number: 1 };

@@ -1,6 +1,12 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -42,10 +48,13 @@ test("CLI draft edits are shared with the browser and the exact CLI publication 
 	const cwd = mkdtempSync(join(tmpdir(), "loop-reviewer-smoke-"));
 	const state = join(cwd, "state");
 	mkdirSync(state, { recursive: true });
-	const env = { ...process.env, XDG_STATE_HOME: state };
+	const env = { ...process.env, XDG_STATE_HOME: state, XDG_CONFIG_HOME: cwd };
 	const cli = (...command: string[]) =>
 		execFileSync("uv", args(...command), { cwd, env, encoding: "utf8" });
 	const initial = cli("review", pr);
+	const estimate = "Estimated generation cost · $0.0234";
+	expect(initial).toContain(estimate);
+	expect(initial).toContain("Generation model: provider/model");
 	const runId = initial.match(/^Run ID: (\d+)$/m)?.[1];
 	expect(runId).toBeTruthy();
 	if (!runId) throw new Error("CLI did not report a run ID");
@@ -61,6 +70,19 @@ test("CLI draft edits are shared with the browser and the exact CLI publication 
 			page.getByRole("heading", { name: "Inbox setup needed" }),
 		).toBeVisible();
 		expect(new URL(page.url()).hash).toBe("");
+		await page.getByRole("link", { name: "Setup", exact: true }).click();
+		const model = page.getByLabel("Pi reviewer model");
+		await model.fill("provider/browser-model");
+		await page.getByRole("button", { name: "Save settings" }).click();
+		await expect(
+			page.getByText("Settings saved.", { exact: true }),
+		).toBeVisible();
+		const config = join(cwd, "loop-reviewer", "config.toml");
+		const saved = readFileSync(config, "utf8");
+		expect(saved).toContain('model = "provider/browser-model"');
+		writeFileSync(config, saved.replace("browser-model", "file-model"));
+		await expect(model).toHaveValue("provider/file-model", { timeout: 10_000 });
+		await page.getByRole("link", { name: "Inbox", exact: true }).click();
 		await page.setViewportSize({ width: 390, height: 844 });
 		await page.getByLabel("Pull request URL").fill(pr);
 		await page
@@ -68,6 +90,10 @@ test("CLI draft edits are shared with the browser and the exact CLI publication 
 			.click();
 		await expect(page).toHaveURL(new RegExp(`/drafts/${runId}$`));
 		await expect(page.getByText("Original CLI feedback")).toBeVisible();
+		await expect(page.getByText(estimate)).toBeVisible();
+		await expect(
+			page.getByText("provider/model", { exact: true }),
+		).toBeVisible();
 
 		await page.getByRole("button", { name: "Edit summary" }).click();
 		const edited =
@@ -94,6 +120,7 @@ test("CLI draft edits are shared with the browser and the exact CLI publication 
 		await expect(
 			page.getByRole("status").filter({ hasText: "Draft saved at version 2." }),
 		).toBeVisible();
+		await expect(page.getByText(estimate)).toBeVisible();
 
 		await page.getByLabel("GitHub action").selectOption("comment");
 		await page.getByRole("button", { name: "Prepare preview" }).click();
@@ -111,6 +138,7 @@ test("CLI draft edits are shared with the browser and the exact CLI publication 
 		const cliBody = cliPreview.match(
 			/----- BEGIN REVIEW BODY -----\n([\s\S]*?)\n----- END REVIEW BODY -----/,
 		)?.[1];
+		expect(cliPreview).not.toContain(estimate);
 		const normalize = (text: string) =>
 			text.replace(/<!-- loop-reviewer:[a-f\d-]+ -->/, "<!-- marker -->");
 		expect(normalize((await body.textContent()) ?? "")).toBe(
@@ -140,6 +168,13 @@ test("CLI draft edits are shared with the browser and the exact CLI publication 
 		await page.reload();
 		await expect(page.getByText("Finished locally · Private")).toBeVisible();
 		await expect(page.getByText(edited)).toBeVisible();
+		await expect(page.getByText(estimate)).toBeVisible();
+		await expect(
+			page.getByText("provider/model", { exact: true }),
+		).toBeVisible();
+		const completed = cli("review", pr);
+		expect(completed).toContain(estimate);
+		expect(completed).toContain("Generation model: provider/model");
 		expect(readFileSync(join(state, "events"), "utf8")).toBe("review\n");
 	} finally {
 		await page.close();

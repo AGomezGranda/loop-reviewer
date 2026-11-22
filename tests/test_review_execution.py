@@ -14,7 +14,7 @@ import pytest
 
 from loop_reviewer.integrations.local_state.review_lock import LockedPiExecution
 from loop_reviewer.review.generate import ReviewerError
-from loop_reviewer.review.model import ReviewDraft, ReviewSelection
+from loop_reviewer.review.model import GeneratedReview, ReviewDraft, ReviewSelection
 from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
 
 _WORKER = """
@@ -33,7 +33,7 @@ from loop_reviewer.review.pull_request import (
     PullRequestRef,
     ReviewedRevision,
 )
-from loop_reviewer.review.model import ReviewDraft
+from loop_reviewer.review.model import GeneratedReview, ReviewDraft
 
 db, locks, mode, number, started, release, marker, retry = sys.argv[1:]
 number = int(number)
@@ -71,7 +71,7 @@ class FakeReviewer:
             )
             while not Path(release).exists():
                 time.sleep(0.05)
-        return ReviewDraft("comment", "summary", ())
+        return GeneratedReview(ReviewDraft("comment", "summary", ()), "provider/model", None)
 
 
 application = ReviewPullRequest(
@@ -90,7 +90,7 @@ from pathlib import Path
 from loop_reviewer.integrations.github_publication import open_gh_publication
 from loop_reviewer.integrations.local_state.publication_lock import LockedPublication
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
-from loop_reviewer.review.model import ReviewDraft, ReviewSelection
+from loop_reviewer.review.model import GeneratedReview, ReviewDraft, ReviewSelection
 from loop_reviewer.review.publication import PublishReview
 from loop_reviewer.review.publication_model import PublicationError, PublicationId, build_preview
 from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
@@ -102,7 +102,9 @@ id = PublicationId("75f718d3-9633-42ad-9097-22f320d068a8")
 app = PublishReview(store, LockedPublication(root / "publication-locks", lambda fd: lambda host: open_gh_publication(environment, host, inherited_fd=fd)))
 if sys.argv[2] == "send":
     selection = ReviewSelection(PullRequestRef("github.com", "acme", "repo", 7, 123), "reviewer", "author", ReviewedRevision("main", "a" * 40, "b" * 40, "c" * 40))
-    run = store.start(selection, replaces=None).finish(ReviewDraft("comment", "summary", ()))
+    run = store.start(selection, replaces=None).finish(
+        GeneratedReview(ReviewDraft("comment", "summary", ()), "provider/model", None)
+    )
     store.save(run)
     store.save_preview(build_preview(id, run.saved_draft(), selection, 1, "comment", frozenset()))
     print(app.publish(id).status)
@@ -301,10 +303,12 @@ def test_lock_close_error_preserves_review_result(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, fails: bool
 ) -> None:
     class StubReviewer:
-        def review(self, selection: ReviewSelection) -> ReviewDraft:
+        def review(self, selection: ReviewSelection) -> GeneratedReview:
             if fails:
                 raise ReviewerError("review failed", "failed")
-            return ReviewDraft("comment", "summary", ())
+            return GeneratedReview(
+                ReviewDraft("comment", "summary", ()), "provider/model", None
+            )
 
     selection = ReviewSelection(
         PullRequestRef("github.com", "acme", "repo", 7),
@@ -331,7 +335,7 @@ def test_lock_close_error_preserves_review_result(
         execution.acquire(selection.key) as reviewer,
     ):
         assert reviewer is not None
-        assert reviewer.review(selection).summary == "summary"
+        assert reviewer.review(selection).draft.summary == "summary"
     assert "Could not close the local review lock." in caplog.text
 
 

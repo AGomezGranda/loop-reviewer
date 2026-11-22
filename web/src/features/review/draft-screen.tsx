@@ -4,6 +4,7 @@ import { type ReactNode, useCallback, useRef, useState } from "react";
 import { useBeforeUnload, useBlocker } from "react-router";
 import { ApiError, errorMessage } from "@/api/client";
 import { FindingCard } from "@/components/finding-card";
+import { GenerationCost } from "@/components/generation-cost";
 import { ReviewedRevision } from "@/components/reviewed-revision";
 import {
 	AlertDialog,
@@ -229,6 +230,7 @@ export function DraftScreen({
 						{saved.selection.url}
 					</a>
 					<ReviewedRevision selection={saved.selection} />
+					<GenerationCost {...saved} />
 					{editor && (
 						<DraftEditor
 							editor={editor}

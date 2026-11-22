@@ -13,15 +13,15 @@ from loop_reviewer.cli.inbox_output import (
 )
 from loop_reviewer.cli.review import run_review_command
 from loop_reviewer.inbox.actions import InboxActions, InboxRowChanged, InboxRowNotFound
+from loop_reviewer.inbox.configuration import ConfigureLocal
 from loop_reviewer.inbox.discovery import (
-    ConfigureInbox,
     InboxNotConfigured,
     RepositoryDiscoveryError,
     ScanSuperseded,
 )
 from loop_reviewer.inbox.model import InboxReport, JiraProjectKey, RepositoryAddress
 from loop_reviewer.inbox.polling import InboxChanges, ScanCycle
-from loop_reviewer.inbox.store import InboxStoreError
+from loop_reviewer.inbox.store import InboxSettingsChanged, InboxStoreError
 from loop_reviewer.review.generate import ReviewOutcome
 from loop_reviewer.review.pull_request import PullRequestRef
 from loop_reviewer.review.store import ReviewStoreError
@@ -62,7 +62,7 @@ def run_inbox_command(
     command: ArgumentParser,
     args: Namespace,
     *,
-    configure: ConfigureInbox,
+    configure: ConfigureLocal,
     scan: Callable[[], InboxReport],
     actions: InboxActions[ReviewOutcome],
     watch: Callable[[], None],
@@ -76,8 +76,9 @@ def run_inbox_command(
                 RepositoryAddress.from_url(url) for url in cast("list[str]", args.repo)
             )
             settings = configure.run(projects, addresses)
+            prefix = ", ".join(project.label for project in settings.projects)
             print(
-                f"Configured {len(settings.repositories)} repositories for {settings.prefix_label}. Run loop-reviewer scan."
+                f"Configured {len(settings.addresses)} repositories for {prefix}. Run loop-reviewer scan."
             )
             return 0
         if args.command == "inbox":
@@ -110,6 +111,7 @@ def run_inbox_command(
     except (
         ValueError,
         InboxNotConfigured,
+        InboxSettingsChanged,
         InboxStoreError,
         RepositoryDiscoveryError,
         ReviewStoreError,

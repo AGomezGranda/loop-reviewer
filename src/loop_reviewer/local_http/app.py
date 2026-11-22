@@ -11,8 +11,8 @@ from starlette.responses import FileResponse, JSONResponse
 from starlette.staticfiles import StaticFiles
 
 from loop_reviewer.inbox.actions import InboxActions, InboxRowChanged, InboxRowNotFound
+from loop_reviewer.inbox.configuration import ConfigureLocal, LocalConfigurationError
 from loop_reviewer.inbox.discovery import (
-    ConfigureInbox,
     RepositoryDiscoveryError,
     ScanSuperseded,
 )
@@ -53,7 +53,7 @@ def create_app(
     capability: str,
     read_inbox: Callable[[], InboxReport],
     scan_inbox: Callable[[], InboxReport],
-    configure_inbox: ConfigureInbox,
+    configure_inbox: ConfigureLocal,
     inbox_actions: InboxActions[ReviewOutcome],
     review_pull_request: Callable[[PullRequestRef, bool], ReviewOutcome],
     drafts: EditReviewDraft,
@@ -153,6 +153,7 @@ def _register_errors(app: FastAPI) -> None:
         GitHubReadError,
         RepositoryDiscoveryError,
         ReviewerError,
+        LocalConfigurationError,
         InboxStoreError,
         ReviewStoreError,
     ):
@@ -174,6 +175,8 @@ def _api_error(error: Exception) -> ApiError:
         )
     if isinstance(error, DraftNotFound | InboxRowNotFound):
         return ApiError(404, "not_found", str(error))
+    if isinstance(error, LocalConfigurationError):
+        return ApiError(422, "invalid_input", str(error))
     if isinstance(error, DraftValidationError):
         return ApiError(422, "invalid_input", str(error))
     if isinstance(error, ReviewAlreadyCompleted):

@@ -133,7 +133,7 @@ def _run_ui() -> int:
             origin=origin,
             capability=capability,
             assets=assets,
-            read_inbox=workflows.read_inbox().run,
+            read_inbox=workflows.read_inbox,
             scan_inbox=watcher.scan_now,
             configure_inbox=workflows.configure_inbox(),
             inbox_actions=workflows.inbox_actions(),
@@ -161,7 +161,7 @@ def _run_inbox(command: ArgumentParser, args: Namespace) -> int:
         actions=workflows.inbox_actions(),
         watch=lambda: watch_inbox_command(
             command,
-            read=workflows.read_inbox().run,
+            read=workflows.read_inbox,
             join=watcher.join,
             tick=watcher.tick,
             cycle=watcher.cycle,
@@ -343,7 +343,14 @@ def _print_saved(command: ArgumentParser, text: str, saved: str) -> int:
 
 
 def _workflows() -> Workflows:
-    return Workflows(_state_directory(), os.environ.copy())
+    environment = os.environ.copy()
+    xdg = environment.get("XDG_CONFIG_HOME", "")
+    config = Path(xdg) if os.path.isabs(xdg) else Path.home() / ".config"
+    return Workflows(
+        _state_directory(),
+        environment,
+        config_path=config / "loop-reviewer" / "config.toml",
+    )
 
 
 def _state_directory() -> Path:

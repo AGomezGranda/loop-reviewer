@@ -1,6 +1,7 @@
 """Render review results as terminal output."""
 
 import sys
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from typing import assert_never
 
 from loop_reviewer.review.feedback import finding_lines
@@ -42,6 +43,7 @@ def render_draft(run: SavedDraft) -> str:
             _comparison_line(run.selection),
             f"Run ID: {run.id}",
             f"Version: {run.draft_version}",
+            *_generation_lines(run.generation_model, run.estimated_cost_usd),
             f"Recommendation: {run.draft.verdict} (private draft; nothing was posted to GitHub)",
             *(["Findings:", *findings] if findings else ["No findings"]),
             "Summary:",
@@ -100,6 +102,7 @@ def render_completed_review(review: CompletedReview) -> str:
             *receipt_lines,
             *selection_lines(review.selection),
             _comparison_line(review.selection),
+            *_generation_lines(review.generation_model, review.estimated_cost_usd),
             f"Recommendation: {draft.verdict}",
             "Summary:",
             draft.summary,
@@ -110,6 +113,19 @@ def render_completed_review(review: CompletedReview) -> str:
             ),
         ]
     )
+
+
+def _generation_lines(model: str | None, amount: float | None) -> list[str]:
+    lines = []
+    if model:
+        lines.append(
+            f"Generation model: {model if model.isprintable() else ascii(model)}"
+        )
+    if amount is None:
+        return [*lines, "Cost unavailable"]
+    with localcontext(rounding=ROUND_HALF_UP):
+        usd = "< $0.0001" if 0 < amount < 0.0001 else f"${Decimal(str(amount)):.4f}"
+    return [*lines, f"Estimated generation cost · {usd}"]
 
 
 def _comparison_line(selection: ReviewSelection) -> str:

@@ -20,6 +20,7 @@ from loop_reviewer.inbox.store import FailedScan, SuccessfulScan
 from loop_reviewer.integrations.local_state.sqlite_inbox import SqliteInboxStore
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
 from loop_reviewer.review.model import (
+    GeneratedReview,
     PublicationReceipt,
     ReviewDraft,
     ReviewKey,
@@ -75,6 +76,7 @@ class FakeDiscovery:
 def github(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeDiscovery:
     github = FakeDiscovery()
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
     def discovery(_environment: object) -> FakeDiscovery:
         return github
@@ -106,6 +108,49 @@ def _setup(
         for arg in ("--repo", f"https://{repo.address.host}/{repo.address.slug}")
     ]
     return _run(monkeypatch, "inbox", "setup", "--jira-project", key, *options)
+
+
+def test_cli_setup_and_scan_share_toml_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    github: FakeDiscovery,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "config" / "loop-reviewer" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        '# My settings\n[reviewer]\nengine = "pi"\nmodel = "provider/model"\n'
+    )
+    assert _setup(monkeypatch, _MAIN) == 0
+    saved = path.read_text()
+    assert "# My settings" in saved
+    assert 'model = "provider/model"' in saved
+    assert 'jira_project_key = "ABC"' in saved
+    assert _MAIN.address.url in saved
+
+    path.write_text(saved.replace('"ABC"', '"XYZ"').replace("Org/Main", "Org/Other"))
+    assert _run(monkeypatch, "scan") == 0
+    assert "[XYZ-…]" in capsys.readouterr().out
+    assert github.scans == [_OTHER]
+
+
+def test_toml_edit_does_not_implicitly_switch_github_accounts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    github: FakeDiscovery,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert _setup(monkeypatch, _MAIN) == 0
+    path = tmp_path / "config" / "loop-reviewer" / "config.toml"
+    path.write_text(path.read_text().replace('"ABC"', '"XYZ"'))
+    del github.rows[_MAIN]
+    github.rows[replace(_MAIN, account="bob")] = ()
+    assert _run(monkeypatch, "scan") == 1
+    assert "GitHub account or repository identity changed" in capsys.readouterr().err
+    saved = SqliteInboxStore(tmp_path / "loop-reviewer" / "reviews.sqlite3").settings()
+    assert saved is not None
+    assert saved.repositories == (_MAIN,)
+    assert github.scans == []
 
 
 def test_failed_setup_keeps_previous_settings(
@@ -174,7 +219,9 @@ def test_completion_hides_cached_row_and_requested_reviews_sort_first(
         ReviewedRevision("main", "1" * 40, "1" * 40, "2" * 40),
     )
     saved = store.start(selection, replaces=None).finish(
-        ReviewDraft("approved", "Looks good", ())
+        GeneratedReview(
+            ReviewDraft("approved", "Looks good", ()), "provider/model", None
+        )
     )
     store.save(saved)
     assert _run(monkeypatch, "scan") == 0
@@ -330,9 +377,9 @@ def test_inbox_open_revalidates_before_history_or_reviewer(
     if scenario == "resume":
 
         class FakeReviewer:
-            def review(self, selected: ReviewSelection) -> ReviewDraft:
+            def review(self, selected: ReviewSelection) -> GeneratedReview:
                 assert selected == selection
-                return draft
+                return GeneratedReview(draft, "provider/model", None)
 
         class InitialExecution:
             def __init__(self, *args: object) -> None: ...
@@ -356,7 +403,9 @@ def test_inbox_open_revalidates_before_history_or_reviewer(
         )
         assert reader.revision_calls == 3
     elif scenario == "completed":
-        saved = store.start(selection, replaces=None).finish(draft)
+        saved = store.start(selection, replaces=None).finish(
+            GeneratedReview(draft, "provider/model", None)
+        )
         store.save(saved)
         store.complete(saved.complete_locally())
         assert _run(monkeypatch, "inbox", "open", pr.ref.url) == 0

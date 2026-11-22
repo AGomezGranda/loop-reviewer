@@ -4,7 +4,7 @@ The inbox is optional. Use a [PR URL directly](reviewing.md#open-or-resume-a-pri
 
 ## Choose repositories
 
-In the browser, open **Setup**. Enter one shared Jira project key and the first repository URL, then select **Add repository** for each additional URL. You can also paste one URL per line into a repository field. Select **Save settings**.
+Edit the [configuration file](configuration.md) or open **Setup** in the browser. Enter one shared Jira project key and the first repository URL, then select **Add repository** for each additional URL. You can also paste one URL per line into a repository field. Select **Save settings**.
 
 In the CLI, specify the project key once and repeat `--repo` for each repository:
 
@@ -15,7 +15,7 @@ loop-reviewer inbox setup --jira-project ABC \
 loop-reviewer scan
 ```
 
-Both interfaces replace the saved settings only after `gh` can list PRs in every repository. Setup records the authenticated account for each host and each repository’s stable ID. If you switch GitHub accounts, sign back in as the configured account or run setup again for the intended account. If an old repository URL no longer resolves after a rename, rerun setup with its current URL.
+Browser and CLI setup write to the same TOML file after `gh` can list PRs in every repository. Edits made directly to the file are verified when the inbox is next read or scanned. Setup records the authenticated account for each host and each repository’s stable ID. If you switch GitHub accounts, sign back in as the configured account or run setup again for the intended account. If an old repository URL no longer resolves after a rename, rerun setup with its current URL.
 
 ## Understand what appears
 

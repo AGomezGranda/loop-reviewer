@@ -8,7 +8,7 @@ Diff preparation uses Git and caps each fetch pack at 256 MiB and the generated 
 
 ## Where state lives
 
-The CLI and browser share `reviews.sqlite3` under `$XDG_STATE_HOME/loop-reviewer/`. When `XDG_STATE_HOME` is unset or relative, the default is `~/.local/state/loop-reviewer/`. The database holds drafts, completion history, publication attempts and receipts, and inbox settings and cached scan data.
+The CLI and browser share `reviews.sqlite3` under `$XDG_STATE_HOME/loop-reviewer/`. When `XDG_STATE_HOME` is unset or relative, the default is `~/.local/state/loop-reviewer/`. The database holds drafts, completion history, publication attempts and receipts, and the verified inbox settings and cached scan data. The [TOML configuration file](configuration.md) holds editable settings.
 
 The local OS account is the trust boundary. Switching `gh` accounts doesn’t hide saved data in the workspace or a draft addressed by its run ID. `draft show` displays the account and revision recorded on the draft. The browser server listens on an ephemeral loopback port; keep its launch link private and don’t expose the workspace to other users.
 

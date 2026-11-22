@@ -11,6 +11,7 @@ from loop_reviewer.integrations.local_state.inbox_schema import (
     rename_inbox_projects,
 )
 from loop_reviewer.integrations.local_state.review_schema import (
+    add_generation_metadata,
     migrate_reviews,
 )
 
@@ -18,6 +19,7 @@ _MIGRATIONS = (
     (6, migrate_reviews),
     (7, create_inbox_tables),
     (8, rename_inbox_projects),
+    (9, add_generation_metadata),
 )
 _SCHEMA_VERSION = _MIGRATIONS[-1][0]
 

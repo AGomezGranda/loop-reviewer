@@ -30,6 +30,7 @@ from loop_reviewer.review.generate import (
 from loop_reviewer.review.model import (
     Finding,
     FindingLocation,
+    GeneratedReview,
     ReviewDraft,
     ReviewIdentity,
     ReviewRun,
@@ -378,6 +379,7 @@ def test_cli_review_displays_private_draft(
     assert f"Target branch: {_REVISION.target_branch}" in lines
     assert f"Merge base: {_REVISION.merge_base}" in lines
     assert f"Head: {_REVISION.head}" in lines
+    assert "Cost unavailable" in lines
     assert (
         f"Comparison: https://git.example.com/acme/repo/compare/"
         f"{_REVISION.merge_base}...{_REVISION.head}"
@@ -517,10 +519,14 @@ def test_cli_review_reports_interruption(
     assert next_step in captured.err
 
 
+@pytest.mark.parametrize(
+    "override", [None, "provider/override"], ids=["toml-model", "environment-override"]
+)
 def test_cli_review_wires_state_and_model(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
+    override: str | None,
 ) -> None:
     state = tmp_path / "state"
     recorded: dict[str, object] = {}
@@ -564,7 +570,14 @@ def test_cli_review_wires_state_and_model(
         return object()
 
     monkeypatch.setenv("XDG_STATE_HOME", str(state))
-    monkeypatch.setenv("LOOP_REVIEWER_PI_MODEL", "provider/model")
+    config = tmp_path / "config" / "loop-reviewer" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('[reviewer]\nengine = "pi"\nmodel = "provider/model"\n')
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config.parent.parent))
+    if override is None:
+        monkeypatch.delenv("LOOP_REVIEWER_PI_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("LOOP_REVIEWER_PI_MODEL", override)
     monkeypatch.setattr(composition, "GhPullRequestReader", build_reader, raising=False)
     monkeypatch.setattr(composition, "SqliteReviewRunStore", build_store, raising=False)
     monkeypatch.setattr(
@@ -584,7 +597,10 @@ def test_cli_review_wires_state_and_model(
 
     assert recorded["db"] == state / "loop-reviewer" / "reviews.sqlite3"
     assert recorded["locks"] == state / "loop-reviewer" / "locks"
-    assert recorded["model"] == "provider/model"
+    assert recorded["model"] == (override or "provider/model")
+    config.write_text('[reviewer]\nmodel = "provider/changed"\n')
+    factory(7)
+    assert recorded["model"] == (override or "provider/changed")
     assert recorded["inherited_fd"] == recorded["git_inherited_fd"] == 7
     assert capsys.readouterr().err.startswith("A review is already in progress")
 
@@ -754,9 +770,11 @@ def test_review_pins_reads_and_fetch_then_checks_current_account(
             assert environment.get("GH_CONFIG_DIR") == str(tmp_path)
             self.comparison = comparison
 
-        def review(self, selection: ReviewSelection) -> ReviewDraft:
+        def review(self, selection: ReviewSelection) -> GeneratedReview:
             assert self.comparison(selection) == "pinned diff"
-            return ReviewDraft("comment", "Reviewed.", ())
+            return GeneratedReview(
+                ReviewDraft("comment", "Reviewed.", ()), "provider/model", 0.0234
+            )
 
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path))
@@ -802,7 +820,11 @@ def publication_fixture(
     store = SqliteReviewRunStore(tmp_path / "loop-reviewer" / "reviews.sqlite3")
     selection = replace(_SELECTION, ref=replace(_SELECTION.ref, repository_id=123))
     run = store.start(selection, replaces=None).finish(
-        ReviewDraft("approved", "  Résumé from draft\n\n", _FINDINGS)
+        GeneratedReview(
+            ReviewDraft("approved", "  Résumé from draft\n\n", _FINDINGS),
+            "provider/model",
+            None,
+        )
     )
     store.save(run)
     return remote, store, run
@@ -1016,7 +1038,9 @@ def test_local_draft_workflow_survives_restart(
 ) -> None:
     store = _local_store(monkeypatch, tmp_path)
     run = store.start(_SELECTION, replaces=None).finish(
-        ReviewDraft("comment", "Old summary", _FINDINGS)
+        GeneratedReview(
+            ReviewDraft("comment", "Old summary", _FINDINGS), "provider/model", None
+        )
     )
     store.save(run)
     run_id = str(run.id)
@@ -1108,7 +1132,7 @@ def test_edit_accepts_utf8_text_line_endings(
 ) -> None:
     store = _local_store(monkeypatch, tmp_path)
     original = store.start(_SELECTION, replaces=None).finish(
-        ReviewDraft("comment", "Original", ())
+        GeneratedReview(ReviewDraft("comment", "Original", ()), "provider/model", None)
     )
     store.save(original)
     text = tmp_path / "edit.txt"
@@ -1142,7 +1166,9 @@ def test_copy_keeps_multiline_feedback_under_its_finding(
         Finding("high", "First\n\nSecond paragraph", "Effect\n\nAnother effect", None),
     )
     run = store.start(_SELECTION, replaces=None).finish(
-        ReviewDraft("comment", "Summary", findings)
+        GeneratedReview(
+            ReviewDraft("comment", "Summary", findings), "provider/model", None
+        )
     )
     store.save(run)
     assert _invoke(monkeypatch, "draft", "copy", str(run.id)) == 0
@@ -1157,7 +1183,7 @@ def test_draft_mutation_prints_utf8_receipt_with_ascii_stdout(
 ) -> None:
     store = _local_store(monkeypatch, tmp_path)
     run = store.start(_SELECTION, replaces=None).finish(
-        ReviewDraft("comment", "Résumé", ())
+        GeneratedReview(ReviewDraft("comment", "Résumé", ()), "provider/model", None)
     )
     store.save(run)
     options = [action, str(run.id), "--version", "1"]
@@ -1184,7 +1210,7 @@ def test_edit_rejects_fifo_without_waiting_for_writer(
 ) -> None:
     store = _local_store(monkeypatch, tmp_path)
     run = store.start(_SELECTION, replaces=None).finish(
-        ReviewDraft("comment", "Summary", ())
+        GeneratedReview(ReviewDraft("comment", "Summary", ()), "provider/model", None)
     )
     store.save(run)
     pipe = tmp_path / "edit.fifo"
@@ -1216,7 +1242,7 @@ def test_finish_keeps_exit_status_when_stdout_pipe_is_closed(
 ) -> None:
     store = _local_store(monkeypatch, tmp_path)
     saved = store.start(_SELECTION, replaces=None).finish(
-        ReviewDraft("comment", "Summary", ())
+        GeneratedReview(ReviewDraft("comment", "Summary", ()), "provider/model", None)
     )
     store.save(saved)
     executable = Path(sysconfig.get_path("scripts")) / "loop-reviewer"
@@ -1275,7 +1301,9 @@ def test_local_draft_runtime_errors(
 ) -> None:
     store = _local_store(monkeypatch, tmp_path)
     saved = store.start(_SELECTION, replaces=None).finish(
-        ReviewDraft("comment", "Summary", _FINDINGS)
+        GeneratedReview(
+            ReviewDraft("comment", "Summary", _FINDINGS), "provider/model", None
+        )
     )
     store.save(saved)
     store.start(
@@ -1323,11 +1351,13 @@ def test_local_draft_argument_errors(
 
 
 @pytest.mark.parametrize("repo", ["repo", "renamed"], ids=["same-name", "renamed"])
+@pytest.mark.parametrize("priced", [True, False], ids=["priced", "legacy"])
 def test_finishes_saved_draft_privately_and_reopens_history(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
     repo: str,
+    priced: bool,
 ) -> None:
     execution = composition.LockedPiExecution
     store = _local_store(monkeypatch, tmp_path)
@@ -1337,15 +1367,32 @@ def test_finishes_saved_draft_privately_and_reopens_history(
         ref=replace(_SELECTION.ref, repository_id=123),
     )
     older = store.start(self_review, replaces=None).finish(
-        ReviewDraft("approved", "Old summary", _FINDINGS)
+        GeneratedReview(
+            ReviewDraft("approved", "Old summary", _FINDINGS),
+            "provider/model",
+            0.023456789 if priced else None,
+        )
     )
+    if not priced:
+        older = replace(older, generation_model=None)
     store.save(older)
     new_head = "d" * 40
     newer = store.start(
         replace(self_review, revision=replace(_REVISION, head=new_head)), replaces=None
     )
-    store.save(newer.finish(ReviewDraft("comment", "Newer draft", ())))
+    store.save(
+        newer.finish(
+            GeneratedReview(
+                ReviewDraft("comment", "Newer draft", ()), "provider/model", None
+            )
+        )
+    )
     run_id = str(older.id)
+    estimate = "Estimated generation cost · $0.0235" if priced else "Cost unavailable"
+    assert _invoke(monkeypatch, "draft", "show", run_id) == 0
+    draft_output = capsys.readouterr().out
+    assert estimate in draft_output
+    assert ("provider/model" in draft_output) == priced
     edit = tmp_path / "summary.txt"
     edit.write_text("Exact edited summary", encoding="utf-8")
     assert (
@@ -1381,6 +1428,8 @@ def test_finishes_saved_draft_privately_and_reopens_history(
     assert f"Head: {_REVISION.head}" in completed.out
     assert "Recommendation: approved" in completed.out
     assert "Exact edited summary" in completed.out
+    assert estimate in completed.out
+    assert ("provider/model" in completed.out) == priced
     assert "High condition" in completed.out
     assert "Medium condition" not in completed.out and new_head not in completed.out
     assert _invoke(monkeypatch, *finish) == 0

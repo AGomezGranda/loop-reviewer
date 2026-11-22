@@ -4,7 +4,7 @@ from json import dumps
 from typing import Never, cast
 
 from loop_reviewer.inbox.actions import InboxActions
-from loop_reviewer.inbox.discovery import ConfigureInbox
+from loop_reviewer.inbox.configuration import ConfigureLocal
 from loop_reviewer.local_http.app import create_app
 from loop_reviewer.review.drafts import EditReviewDraft
 from loop_reviewer.review.generate import ReviewOutcome
@@ -23,7 +23,7 @@ def main() -> None:
         capability="",
         read_inbox=_offline,
         scan_inbox=_offline,
-        configure_inbox=cast("ConfigureInbox", None),
+        configure_inbox=cast("ConfigureLocal", None),
         inbox_actions=cast("InboxActions[ReviewOutcome]", None),
         review_pull_request=_offline,
         drafts=cast("EditReviewDraft", None),

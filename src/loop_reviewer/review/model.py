@@ -263,11 +263,20 @@ class ReviewSelection:
 
 
 @dataclass(frozen=True)
+class GeneratedReview:
+    draft: ReviewDraft
+    model: str
+    estimated_cost_usd: float | None
+
+
+@dataclass(frozen=True)
 class SavedDraft:
     id: int
     draft_version: int
     selection: ReviewSelection
     draft: ReviewDraft
+    generation_model: str | None = None
+    estimated_cost_usd: float | None = None
 
 
 @dataclass(frozen=True)
@@ -276,6 +285,8 @@ class CompletedReview:
     selection: ReviewSelection
     final_draft: ReviewDraft
     receipt: PublicationReceipt | None = None
+    generation_model: str | None = None
+    estimated_cost_usd: float | None = None
 
     @property
     def publication_status(self) -> Literal["not_published", "published"]:
@@ -296,10 +307,18 @@ class ReviewRun:
     failure: str | None
     draft_version: int = 1
     failure_kind: ReviewerFailureKind | None = None
+    generation_model: str | None = None
+    estimated_cost_usd: float | None = None
 
     def __post_init__(self) -> None:
         if (self.status == "draft_ready") != (self.draft is not None):
             raise RunTransitionError("The review attempt has an inconsistent draft.")
+        if self.draft is None and (
+            self.generation_model is not None or self.estimated_cost_usd is not None
+        ):
+            raise RunTransitionError(
+                "The review attempt has inconsistent generation metadata."
+            )
         if (self.status == "failed") != (self.failure is not None) or (
             self.status != "failed" and self.failure_kind is not None
         ):
@@ -328,16 +347,36 @@ class ReviewRun:
     def saved_draft(self) -> SavedDraft:
         if self.draft is None:
             raise RunTransitionError("There is no saved draft for this attempt.")
-        return SavedDraft(self.id, self.draft_version, self.selection, self.draft)
+        return SavedDraft(
+            self.id,
+            self.draft_version,
+            self.selection,
+            self.draft,
+            self.generation_model,
+            self.estimated_cost_usd,
+        )
 
     def complete_locally(self) -> CompletedReview:
         if self.status != "draft_ready" or self.draft is None:
             raise RunTransitionError("Only a saved draft can be finished locally.")
-        return CompletedReview(self.draft_target, self.selection, self.draft)
+        return CompletedReview(
+            self.draft_target,
+            self.selection,
+            self.draft,
+            generation_model=self.generation_model,
+            estimated_cost_usd=self.estimated_cost_usd,
+        )
 
-    def finish(self, draft: ReviewDraft) -> Self:
+    def finish(self, generated: GeneratedReview) -> Self:
         self._require_running()
-        return replace(self, status="draft_ready", draft=draft, failure=None)
+        return replace(
+            self,
+            status="draft_ready",
+            draft=generated.draft,
+            failure=None,
+            generation_model=generated.model,
+            estimated_cost_usd=generated.estimated_cost_usd,
+        )
 
     def fail(self, message: str, kind: ReviewerFailureKind) -> Self:
         self._require_running()

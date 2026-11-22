@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { errorMessage } from "@/api/client";
 import { FindingCard } from "@/components/finding-card";
+import { GenerationCost } from "@/components/generation-cost";
 import { ReviewedRevision } from "@/components/reviewed-revision";
 import { Button } from "@/components/ui/button";
 import { completionQuery, historyQuery } from "./history-queries";
@@ -120,6 +121,7 @@ export function CompletionScreen({
 						)}
 					</div>
 					<ReviewedRevision selection={item.selection} />
+					<GenerationCost {...item} />
 					<section className="space-y-2 rounded-lg border bg-card p-4">
 						<h2 className="font-medium">Final feedback</h2>
 						<p className="text-sm text-muted-foreground">

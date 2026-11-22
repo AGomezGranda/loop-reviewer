@@ -13,6 +13,7 @@ from loop_reviewer.review.model import (
     CompletedReview,
     Finding,
     FindingLocation,
+    GeneratedReview,
     PublicationReceipt,
     ReviewDraft,
     ReviewIdentity,
@@ -123,10 +124,14 @@ def test_preview_rechecks_comparison_after_anchor_lookup(
     location = FindingLocation("file.py", 3)
     store = SqliteReviewRunStore(tmp_path / "state" / "reviews.sqlite3")
     run = store.start(_SELECTION, replaces=None).finish(
-        ReviewDraft(
-            "approved",
-            "Summary",
-            (Finding("low", "condition", "consequence", location),),
+        GeneratedReview(
+            ReviewDraft(
+                "approved",
+                "Summary",
+                (Finding("low", "condition", "consequence", location),),
+            ),
+            "provider/model",
+            None,
         )
     )
     store.save(run)
@@ -213,7 +218,9 @@ class Remote:
 
 def _ready(store: SqliteReviewRunStore) -> tuple[ReviewRun, PublicationPreview]:
     run = store.start(_SELECTION, replaces=None).finish(
-        ReviewDraft("comment", "Exact summary", ())
+        GeneratedReview(
+            ReviewDraft("comment", "Exact summary", ()), "provider/model", None
+        )
     )
     store.save(run)
     preview = build_preview(

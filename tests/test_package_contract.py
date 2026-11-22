@@ -74,6 +74,7 @@ def test_cli_handlers_do_not_import_integrations_or_persistence_ports() -> None:
     )
     errors = {
         f"{_INBOX}.store.InboxStoreError",
+        f"{_INBOX}.store.InboxSettingsChanged",
         f"{_REVIEW}.store.DraftConflict",
         f"{_REVIEW}.store.ReviewStoreError",
         f"{_REVIEW}.store.UnconfirmedPublication",

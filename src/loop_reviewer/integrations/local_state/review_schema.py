@@ -55,3 +55,12 @@ def migrate_reviews(connection: sqlite3.Connection, from_version: int) -> None:
     if from_version < 6:
         for statement in MIGRATE_V6:
             connection.execute(statement)
+
+
+def add_generation_metadata(connection: sqlite3.Connection, _from_version: int) -> None:
+    for table in ("review_runs", "review_completions"):
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN generation_model TEXT")
+        connection.execute(
+            f"ALTER TABLE {table} ADD COLUMN estimated_cost_usd REAL "
+            "CHECK (estimated_cost_usd >= 0)"
+        )

@@ -14,7 +14,7 @@ from loop_reviewer.inbox.model import (
 from loop_reviewer.inbox.store import FailedScan, SuccessfulScan
 from loop_reviewer.integrations.local_state.sqlite_inbox import SqliteInboxStore
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
-from loop_reviewer.review.model import ReviewDraft, ReviewSelection
+from loop_reviewer.review.model import GeneratedReview, ReviewDraft, ReviewSelection
 from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
 
 
@@ -140,7 +140,11 @@ def test_read_inbox_reflects_local_actions_without_discovery(tmp_path: Path) -> 
     )
     run = reviews.start(select, replaces=None)
     assert reader.run().active[0].last_saved == "running"
-    run = run.finish(ReviewDraft("approved", "Looks good", ()))
+    run = run.finish(
+        GeneratedReview(
+            ReviewDraft("approved", "Looks good", ()), "provider/model", None
+        )
+    )
     reviews.save(run)
     reviews.complete(run.complete_locally())
     assert not reader.run().active

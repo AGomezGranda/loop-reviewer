@@ -13,6 +13,7 @@ from loop_reviewer.local_http.serve import serve
 from loop_reviewer.review.model import (
     Finding,
     FindingLocation,
+    GeneratedReview,
     PublicationReceipt,
     ReviewDraft,
     ReviewSelection,
@@ -58,9 +59,9 @@ class FakeReviewer:
     def __init__(self, *_args: object, **_options: object) -> None:
         pass
 
-    def review(self, _selection: ReviewSelection) -> ReviewDraft:
+    def review(self, _selection: ReviewSelection) -> GeneratedReview:
         _count("review")
-        return ReviewDraft(
+        draft = ReviewDraft(
             "comment",
             "Original CLI feedback",
             (
@@ -72,6 +73,7 @@ class FakeReviewer:
                 ),
             ),
         )
+        return GeneratedReview(draft, "provider/model", 0.0234)
 
 
 class FakePublication:

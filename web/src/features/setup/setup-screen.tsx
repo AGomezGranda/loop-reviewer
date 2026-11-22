@@ -25,6 +25,8 @@ function SetupForm({
 	const pristine = useMemo(
 		() => ({
 			version: initial.settingsVersion,
+			revision: initial.configRevision,
+			model: initial.reviewerModel ?? "",
 			project: initial.jiraProjectKeys.join(", "),
 			repositories: (initial.repositoryUrls.length
 				? initial.repositoryUrls
@@ -34,7 +36,10 @@ function SetupForm({
 		[initial],
 	);
 	const [edits, setEdits] = useState<typeof pristine | null>(null);
-	const { version, project, repositories } = edits ?? pristine;
+	const { version, revision, model, project, repositories } = edits ?? pristine;
+	const hasInbox =
+		Boolean(pristine.project || project.trim()) ||
+		repositories.some((row) => row.url.trim());
 	const [focusRow, setFocusRow] = useState<string>();
 	const save = useMutation({
 		mutationFn: (body: components["schemas"]["ConfigureInboxRequest"]) =>
@@ -53,13 +58,16 @@ function SetupForm({
 	});
 	const conflict =
 		version !== initial.settingsVersion ||
+		revision !== initial.configRevision ||
 		(save.error instanceof ApiError &&
 			save.error.details.code === "inbox_changed");
 	const busy = save.isPending || reload.isPending;
 	function change(
-		fields: Partial<Pick<typeof pristine, "project" | "repositories">>,
+		fields: Partial<
+			Pick<typeof pristine, "model" | "project" | "repositories">
+		>,
 	) {
-		setEdits({ version, project, repositories, ...fields });
+		setEdits({ version, revision, model, project, repositories, ...fields });
 		if (!conflict) save.reset();
 	}
 
@@ -71,8 +79,12 @@ function SetupForm({
 				if (busy || conflict) return;
 				save.mutate({
 					settingsVersion: version,
-					jiraProjectKeys: [project.trim()],
-					repositoryUrls: repositories.map((row) => row.url.trim()),
+					configRevision: revision,
+					reviewerModel: model.trim(),
+					jiraProjectKeys: hasInbox ? [project.trim()] : [],
+					repositoryUrls: hasInbox
+						? repositories.map((row) => row.url.trim())
+						: [],
 				});
 			}}
 		>
@@ -117,7 +129,7 @@ function SetupForm({
 								aria-label={`Repository URL ${index + 1}`}
 								className="min-w-0 bg-background font-mono"
 								placeholder="https://github.com/OWNER/REPO"
-								required
+								required={hasInbox}
 								spellCheck={false}
 								ref={(input) => {
 									if (input && row.id === focusRow) {
@@ -191,11 +203,34 @@ function SetupForm({
 					className="w-32 bg-background font-mono"
 					placeholder="ABC"
 					spellCheck={false}
-					required
+					required={hasInbox}
 					disabled={busy}
 					value={project}
 					onChange={(event) => {
 						change({ project: event.target.value });
+					}}
+				/>
+			</div>
+
+			<div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
+				<div>
+					<label className="text-sm font-medium" htmlFor="reviewer-model">
+						Pi reviewer model
+					</label>
+					<p id="model-format" className="text-xs text-muted-foreground">
+						Use PROVIDER/MODEL for new drafts.
+					</p>
+				</div>
+				<Input
+					id="reviewer-model"
+					aria-describedby="model-format"
+					className="w-64 bg-background font-mono"
+					placeholder="PROVIDER/MODEL"
+					spellCheck={false}
+					disabled={busy}
+					value={model}
+					onChange={(event) => {
+						change({ model: event.target.value });
 					}}
 				/>
 			</div>
@@ -206,7 +241,7 @@ function SetupForm({
 				</Button>
 				{save.isPending && (
 					<p role="status" className="text-sm">
-						Verifying repositories…
+						Saving settings…
 					</p>
 				)}
 				{conflict && (
@@ -221,13 +256,15 @@ function SetupForm({
 							: "Reload settings and discard edits"}
 					</Button>
 				)}
-				{save.isSuccess && !conflict && (
-					<p role="status" className="text-sm">
-						Watching {repositories.length}{" "}
-						{repositories.length === 1 ? "repository" : "repositories"} for{" "}
-						{project}.
-					</p>
-				)}
+				{save.data &&
+					save.data.configRevision === initial.configRevision &&
+					!conflict && (
+						<p role="status" className="text-sm">
+							{hasInbox
+								? `Watching ${repositories.length} ${repositories.length === 1 ? "repository" : "repositories"} for ${project}.`
+								: "Settings saved."}
+						</p>
+					)}
 			</div>
 			{(conflict || save.error || reload.error) && (
 				<p role="alert" className="border-t px-4 py-3 text-sm text-destructive">
@@ -250,13 +287,19 @@ export function SetupScreen({
 	const cache = useQueryClient();
 	const configuration = useQuery({
 		queryKey: configurationKey,
+		refetchInterval: 5_000,
 		queryFn: ({ signal }) =>
 			request("get", "/api/v1/inbox/configuration", { signal }),
 	});
 
 	return (
 		<div className="space-y-4">
-			<h1 className="text-2xl font-semibold tracking-tight">Inbox setup</h1>
+			<h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+			{configuration.error && (
+				<p role="alert" className="text-destructive">
+					{errorMessage(configuration.error)}
+				</p>
+			)}
 			{configuration.data ? (
 				<SetupForm
 					initial={configuration.data}
@@ -267,12 +310,8 @@ export function SetupScreen({
 						onSaved();
 					}}
 				/>
-			) : configuration.error ? (
-				<p role="alert" className="text-destructive">
-					{errorMessage(configuration.error)}
-				</p>
 			) : (
-				<p role="status">Loading setup…</p>
+				!configuration.error && <p role="status">Loading setup…</p>
 			)}
 			{checks}
 		</div>

@@ -1,6 +1,7 @@
 """Translate between SQLite records and review workflow objects."""
 
 import json
+import math
 from typing import cast
 
 from loop_reviewer.review.model import (
@@ -27,7 +28,7 @@ _STATUSES = {"running", "draft_ready", "failed", "abandoned"}
 
 
 def completion_from_row(row: tuple[object, ...]) -> CompletedReview:
-    run_id, version, selection, draft, status, review_id, action = row
+    run_id, version, selection, draft, status, review_id, action, model, cost = row
     if type(run_id) is not int or run_id < 1 or type(version) is not int or version < 1:
         raise ReviewStoreError(_UNREADABLE)
     receipt = None
@@ -45,6 +46,8 @@ def completion_from_row(row: tuple[object, ...]) -> CompletedReview:
         selection_from_json(selection),
         _draft_from_json(draft),
         receipt,
+        _generation_model(model),
+        _generation_cost(cost),
     )
 
 
@@ -96,7 +99,17 @@ def draft_json(draft: ReviewDraft) -> str:
 
 
 def run_from_row(row: tuple[object, ...]) -> ReviewRun:
-    run_id, selection, status, draft_text, failure, version, failure_kind = row
+    (
+        run_id,
+        selection,
+        status,
+        draft_text,
+        failure,
+        version,
+        failure_kind,
+        model,
+        cost,
+    ) = row
     if (
         type(run_id) is not int
         or run_id < 1
@@ -118,9 +131,25 @@ def run_from_row(row: tuple[object, ...]) -> ReviewRun:
             failure,
             version,
             cast("ReviewerFailureKind | None", failure_kind),
+            _generation_model(model),
+            _generation_cost(cost),
         )
     except RunTransitionError:
         raise ReviewStoreError(_UNREADABLE) from None
+
+
+def _generation_model(value: object) -> str | None:
+    if value is not None and not isinstance(value, str):
+        raise ReviewStoreError(_UNREADABLE)
+    return value
+
+
+def _generation_cost(value: object) -> float | None:
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        raise ReviewStoreError(_UNREADABLE)
+    return float(value)
 
 
 def selection_from_json(value: object) -> ReviewSelection:

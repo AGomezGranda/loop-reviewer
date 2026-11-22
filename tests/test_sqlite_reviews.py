@@ -13,6 +13,12 @@ from typing import Protocol
 
 import pytest
 
+from loop_reviewer.integrations.local_state.inbox_schema import (
+    create_inbox_tables,
+    rename_inbox_projects,
+)
+from loop_reviewer.integrations.local_state.keys import identity_key
+from loop_reviewer.integrations.local_state.review_schema import migrate_reviews
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
 from loop_reviewer.review.drafts import EditReviewDraft
 from loop_reviewer.review.model import (
@@ -20,6 +26,7 @@ from loop_reviewer.review.model import (
     DraftValidationError,
     Finding,
     FindingLocation,
+    GeneratedReview,
     PublicationReceipt,
     ReviewAlreadyCompleted,
     ReviewDraft,
@@ -77,7 +84,7 @@ def _path(tmp_path: Path) -> Path:
 def test_round_trips_run_and_draft(tmp_path: Path) -> None:
     store = _store(tmp_path)
     run = store.start(_SELECTION, replaces=None)
-    store.save(run.finish(_DRAFT))
+    store.save(run.finish(GeneratedReview(_DRAFT, "provider/model", None)))
 
     stored = SqliteReviewRunStore(_path(tmp_path)).latest(_SELECTION.key)
 
@@ -88,6 +95,54 @@ def test_round_trips_run_and_draft(tmp_path: Path) -> None:
     assert stored.draft == _DRAFT
     assert stored.failure is None
     assert stored.draft_version == 1
+
+
+@pytest.mark.parametrize("published", [False, True], ids=["local", "published"])
+def test_generation_metadata_survives_edits_and_completion(
+    tmp_path: Path, published: bool
+) -> None:
+    store = _store(tmp_path)
+    selection = replace(_SELECTION, ref=replace(_SELECTION.ref, repository_id=17))
+    generated = GeneratedReview(_DRAFT, "provider/model", 0.023456789)
+    run = store.start(selection, replaces=None).finish(generated)
+    store.save(run)
+
+    reopened = _store(tmp_path)
+    edited = EditReviewDraft(reopened).edit_summary(run.draft_target, "Edited")
+    saved = _store(tmp_path).get_draft(run.id)
+    assert saved == edited
+    assert saved is not None
+    assert saved.saved_draft().generation_model == generated.model
+    assert saved.saved_draft().estimated_cost_usd == generated.estimated_cost_usd
+
+    if published:
+        id = PublicationId("75f718d3-9633-42ad-9097-22f320d068a8")
+        preview = build_preview(
+            id, saved.saved_draft(), selection, 17, "comment", frozenset()
+        )
+        legacy_preview = build_preview(
+            id,
+            replace(
+                saved.saved_draft(), generation_model=None, estimated_cost_usd=None
+            ),
+            selection,
+            17,
+            "comment",
+            frozenset(),
+        )
+        assert preview == legacy_preview
+        reopened.save_preview(preview)
+        reopened.reserve_send(id, "preview")
+        receipt = PublicationReceipt(45, "comment")
+        completion = reopened.record_published(id, receipt)
+        assert _store(tmp_path).record_published(id, receipt) == completion
+    else:
+        completion = reopened.complete(saved.complete_locally())
+        assert _store(tmp_path).complete(saved.complete_locally()) == completion
+    assert _store(tmp_path).completion(run.id) == completion
+    assert completion.final_draft.summary == "Edited"
+    assert completion.generation_model == generated.model
+    assert completion.estimated_cost_usd == generated.estimated_cost_usd
 
 
 @pytest.mark.parametrize(
@@ -104,7 +159,9 @@ def test_round_trips_run_and_draft(tmp_path: Path) -> None:
 )
 def test_rejects_inconsistent_stored_records(tmp_path: Path, case: str) -> None:
     store = _store(tmp_path)
-    run = store.start(_SELECTION, replaces=None).finish(_DRAFT)
+    run = store.start(_SELECTION, replaces=None).finish(
+        GeneratedReview(_DRAFT, "provider/model", None)
+    )
     store.save(run)
     store.complete(run.complete_locally())
     connection = sqlite3.connect(_path(tmp_path))
@@ -150,7 +207,7 @@ def test_save_rejects_result_for_different_run_snapshot(
 ) -> None:
     store = _store(tmp_path)
     running = store.start(_SELECTION, replaces=None)
-    finished = running.finish(_DRAFT)
+    finished = running.finish(GeneratedReview(_DRAFT, "provider/model", None))
     mismatched = (
         replace(finished, selection=_new_head())
         if change == "selection"
@@ -173,7 +230,9 @@ def test_does_not_reuse_runs_or_history_for_unrelated_repository_ids(
     previous = replace(
         _SELECTION, ref=replace(_SELECTION.ref, repository_id=previous_repository_id)
     )
-    old = store.start(previous, replaces=None).finish(_DRAFT)
+    old = store.start(previous, replaces=None).finish(
+        GeneratedReview(_DRAFT, "provider/model", None)
+    )
     store.save(old)
     completed = store.complete(old.complete_locally())
 
@@ -189,7 +248,9 @@ def test_does_not_reuse_runs_or_history_for_unrelated_repository_ids(
 def test_draft_can_be_resumed_after_repository_rename(tmp_path: Path) -> None:
     store = _store(tmp_path)
     original = replace(_SELECTION, ref=replace(_SELECTION.ref, repository_id=123))
-    saved = store.start(original, replaces=None).finish(_DRAFT)
+    saved = store.start(original, replaces=None).finish(
+        GeneratedReview(_DRAFT, "provider/model", None)
+    )
     store.save(saved)
 
     renamed = replace(
@@ -274,9 +335,37 @@ def test_upgrades_v1_drafts_without_changing_selection(tmp_path: Path) -> None:
         assert connection.execute("SELECT selection FROM review_runs").fetchone() == (
             original_json,
         )
-        assert connection.execute("PRAGMA user_version").fetchone() == (8,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (9,)
     finally:
         connection.close()
+
+
+def test_upgrades_v8_with_unpriced_draft_and_completion(tmp_path: Path) -> None:
+    _legacy_database(tmp_path)
+    with sqlite3.connect(_path(tmp_path)) as connection:
+        migrate_reviews(connection, 1)
+        create_inbox_tables(connection, 6)
+        rename_inbox_projects(connection, 7)
+        connection.execute(
+            "INSERT INTO review_completions "
+            "(identity_key, run_id, draft_version, selection, final_draft, publication_status) "
+            "SELECT ?, id, draft_version, selection, draft, 'not_published' FROM review_runs",
+            (identity_key(_SELECTION.identity),),
+        )
+        connection.execute("PRAGMA user_version = 8")
+
+    store = _store(tmp_path)
+    run = store.get_draft(1)
+    completion = store.completion(1)
+    assert run is not None and completion is not None
+    assert run.saved_draft().generation_model is None
+    assert run.saved_draft().estimated_cost_usd is None
+    assert completion.generation_model is None
+    assert completion.estimated_cost_usd is None
+    assert completion.final_draft == ReviewDraft("approved", "legacy", ())
+    assert _store(tmp_path).complete(completion) == completion
+    with sqlite3.connect(_path(tmp_path)) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (9,)
 
 
 def test_upgrades_v4_without_losing_completed_history(tmp_path: Path) -> None:
@@ -292,12 +381,17 @@ def test_upgrades_v4_without_losing_completed_history(tmp_path: Path) -> None:
         connection.close()
 
     reopened = _store(tmp_path)
-    assert reopened.completed(_SELECTION.identity) == completion
-    assert reopened.complete(completion) == completion
+    legacy_completion = replace(completion, generation_model=None)
+    assert reopened.completed(_SELECTION.identity) == legacy_completion
+    assert reopened.complete(completion) == legacy_completion
 
 
 def _restore_v6_schema(connection: sqlite3.Connection) -> None:
     connection.executescript("""
+        ALTER TABLE review_runs DROP COLUMN estimated_cost_usd;
+        ALTER TABLE review_runs DROP COLUMN generation_model;
+        ALTER TABLE review_completions DROP COLUMN estimated_cost_usd;
+        ALTER TABLE review_completions DROP COLUMN generation_model;
         DROP INDEX review_runs_activity;
         DROP TABLE inbox_deferrals;
         DROP TABLE inbox_repositories;
@@ -333,11 +427,12 @@ def test_upgrade_from_v5_preserves_edited_drafts_and_local_history(
         _restore_legacy_completion_schema(connection)
         connection.execute("PRAGMA user_version = 5")
     reopened = _store(tmp_path)
-    assert reopened.get_draft(run.id) == edited
-    assert reopened.completed(_SELECTION.identity) == completion
-    assert reopened.complete(completion) == completion
+    assert reopened.get_draft(run.id) == replace(edited, generation_model=None)
+    legacy_completion = replace(completion, generation_model=None)
+    assert reopened.completed(_SELECTION.identity) == legacy_completion
+    assert reopened.complete(completion) == legacy_completion
     with sqlite3.connect(_path(tmp_path)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (8,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (9,)
         assert connection.execute(
             "SELECT github_review_id, publication_action FROM review_completions"
         ).fetchone() == (None, None)
@@ -430,8 +525,10 @@ def test_upgrade_from_v6_preserves_reviews_and_projects_stable_activity(
             (malformed.id,),
         )
     reopened = _store(tmp_path)
-    assert reopened.get_draft(draft.id) == draft
-    assert reopened.completed(completed_run.selection.identity) == completion
+    assert reopened.get_draft(draft.id) == replace(draft, generation_model=None)
+    assert reopened.completed(completed_run.selection.identity) == replace(
+        completion, generation_model=None
+    )
     publication = reopened.get_publication(preview.id)
     assert publication is not None and publication.receipt == completion.receipt
     assert reopened.activity(
@@ -541,7 +638,9 @@ def test_draft_application_rejects_invalid_run_id(
 
 def test_draft_version_prevents_lost_update(tmp_path: Path) -> None:
     first, second = _store(tmp_path), _store(tmp_path)
-    run = first.start(_SELECTION, replaces=None).finish(_DRAFT)
+    run = first.start(_SELECTION, replaces=None).finish(
+        GeneratedReview(_DRAFT, "provider/model", None)
+    )
     first.save(run)
     preview = second.get_draft(run.id)
     assert preview == run
@@ -579,7 +678,9 @@ def test_store_rejects_edits_to_reviewer_metadata(tmp_path: Path, change: str) -
 
 def test_failed_draft_write_preserves_version_and_feedback(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    run = store.start(_SELECTION, replaces=None).finish(_DRAFT)
+    run = store.start(_SELECTION, replaces=None).finish(
+        GeneratedReview(_DRAFT, "provider/model", None)
+    )
     store.save(run)
     connection = sqlite3.connect(_path(tmp_path))
     try:
@@ -596,7 +697,9 @@ def test_failed_draft_write_preserves_version_and_feedback(tmp_path: Path) -> No
 
 
 def _saved(store: ReviewRunStore, selection: ReviewSelection = _SELECTION) -> ReviewRun:
-    run = store.start(selection, replaces=None).finish(_DRAFT)
+    run = store.start(selection, replaces=None).finish(
+        GeneratedReview(_DRAFT, "provider/model", None)
+    )
     store.save(run)
     return run
 
@@ -740,7 +843,7 @@ def test_run_and_draft_commit_together(tmp_path: Path) -> None:
         connection.close()
 
     with pytest.raises(ReviewStoreError):
-        store.save(run.finish(_DRAFT))
+        store.save(run.finish(GeneratedReview(_DRAFT, "provider/model", None)))
 
     stored = store.latest(_SELECTION.key)
     assert stored is not None
@@ -753,7 +856,7 @@ def test_run_and_draft_commit_together(tmp_path: Path) -> None:
         connection.commit()
     finally:
         connection.close()
-    store.save(run.finish(_DRAFT))
+    store.save(run.finish(GeneratedReview(_DRAFT, "provider/model", None)))
     stored = store.latest(_SELECTION.key)
     assert stored is not None
     assert stored.status == "draft_ready"

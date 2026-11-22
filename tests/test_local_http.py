@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from threading import Event, Thread
 from time import monotonic, sleep
+from tomllib import loads
 from typing import Literal, override
 
 import httpx
@@ -29,7 +30,12 @@ from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRu
 from loop_reviewer.local_http.app import create_app
 from loop_reviewer.local_http.serve import BrowserServer
 from loop_reviewer.review.history import ReviewHistory
-from loop_reviewer.review.model import PublicationReceipt, ReviewDraft, ReviewSelection
+from loop_reviewer.review.model import (
+    GeneratedReview,
+    PublicationReceipt,
+    ReviewDraft,
+    ReviewSelection,
+)
 from loop_reviewer.review.publication_model import PublicationPreview
 from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
 from loop_reviewer.review.store import ReviewStoreError
@@ -59,7 +65,7 @@ def _app(
     return create_app(
         origin=origin,
         capability="test-capability",
-        read_inbox=workflows.read_inbox().run,
+        read_inbox=workflows.read_inbox,
         scan_inbox=watcher.scan_now,
         configure_inbox=workflows.configure_inbox(),
         inbox_actions=workflows.inbox_actions(),
@@ -76,7 +82,9 @@ def _app(
 
 @pytest.fixture
 async def client(tmp_path: Path) -> AsyncGenerator[httpx.AsyncClient]:
-    workflows = Workflows(tmp_path / "loop-reviewer", {})
+    workflows = Workflows(
+        tmp_path / "loop-reviewer", {}, config_path=tmp_path / "config.toml"
+    )
     watcher = workflows.inbox_watch(monotonic=lambda: 0)
     transport = httpx.ASGITransport(app=_app(workflows, watcher))
     async with httpx.AsyncClient(transport=transport, base_url=_ORIGIN) as session:
@@ -94,7 +102,7 @@ async def test_saved_edit_can_be_returned_during_publication_history_failure(
         ReviewedRevision("main", "a" * 40, "b" * 40, "c" * 40),
     )
     saved = store.start(selection, replaces=None).finish(
-        ReviewDraft("approved", "Original", ())
+        GeneratedReview(ReviewDraft("approved", "Original", ()), "provider/model", None)
     )
     store.save(saved)
 
@@ -147,6 +155,40 @@ async def test_requires_capability_host_and_write_origin(
     assert valid.headers["referrer-policy"] == "no-referrer"
 
 
+@pytest.mark.parametrize("priced", [True, False], ids=["priced", "legacy"])
+async def test_draft_and_completion_return_saved_generation_metadata(
+    client: httpx.AsyncClient, tmp_path: Path, priced: bool
+) -> None:
+    store = SqliteReviewRunStore(tmp_path / "loop-reviewer" / "reviews.sqlite3")
+    selection = ReviewSelection(
+        PullRequestRef("github.com", "org", "repo", 1, 42),
+        "reviewer",
+        "teammate",
+        ReviewedRevision("main", "a" * 40, "b" * 40, "c" * 40),
+    )
+    amount = 0.023456789 if priced else None
+    saved = store.start(selection, replaces=None).finish(
+        GeneratedReview(
+            ReviewDraft("approved", "Original", ()), "provider/model", amount
+        )
+    )
+    if not priced:
+        saved = replace(saved, generation_model=None)
+    store.save(saved)
+    url = f"/api/v1/drafts/{saved.id}"
+    draft = await client.get(url, headers=_HEADERS)
+    finished = await client.post(
+        f"{url}/finish", headers=_HEADERS, json={"version": "1"}
+    )
+    history = await client.get(f"/api/v1/history/{saved.id}", headers=_HEADERS)
+    for response in (draft, finished, history):
+        assert response.status_code == 200
+        assert response.json()["generationModel"] == (
+            "provider/model" if priced else None
+        )
+        assert response.json()["estimatedCostUsd"] == amount
+
+
 @pytest.mark.parametrize(
     "data",
     [
@@ -179,7 +221,7 @@ async def test_invalid_patch_returns_typed_error(
 
 
 async def test_setup_applies_one_project_to_multiple_repositories(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     urls = ["https://github.com/org/first", "https://github.com/org/second"]
 
@@ -216,11 +258,15 @@ async def test_setup_applies_one_project_to_multiple_repositories(
         "settingsVersion": None,
         "jiraProjectKeys": [],
         "repositoryUrls": [],
+        "configRevision": empty.json()["configRevision"],
+        "reviewerModel": None,
     }
     body: dict[str, object] = {
         "settingsVersion": None,
         "jiraProjectKeys": [" abc "],
         "repositoryUrls": urls,
+        "configRevision": empty.json()["configRevision"],
+        "reviewerModel": "provider/model",
     }
     saved = await client.post(url, json=body, headers=_HEADERS)
     assert saved.status_code == 200
@@ -229,11 +275,19 @@ async def test_setup_applies_one_project_to_multiple_repositories(
         "settingsVersion": "1",
         "jiraProjectKeys": ["ABC"],
         "repositoryUrls": urls,
+        "configRevision": settings["configRevision"],
+        "reviewerModel": "provider/model",
+    }
+    path = tmp_path / "config.toml"
+    assert loads(path.read_text()) == {
+        "inbox": {"jira_project_key": "ABC", "repositories": urls},
+        "reviewer": {"engine": "pi", "model": "provider/model"},
     }
     stale = await client.post(url, json=body, headers=_HEADERS)
     assert stale.status_code == 409
     assert stale.json()["code"] == "inbox_changed"
     body["settingsVersion"] = "1"
+    body["configRevision"] = settings["configRevision"]
     extra_project = await client.post(
         url, json={**body, "jiraProjectKeys": ["ABC", "XYZ"]}, headers=_HEADERS
     )
@@ -249,6 +303,13 @@ async def test_setup_applies_one_project_to_multiple_repositories(
     assert failed.status_code == 502
     assert (await client.get(url, headers=_HEADERS)).json() == settings
 
+    path.write_text(path.read_text().replace("provider/model", "provider/edited"))
+    conflict = await client.post(url, json=body, headers=_HEADERS)
+    assert conflict.status_code == 409
+    latest = (await client.get(url, headers=_HEADERS)).json()
+    assert latest["settingsVersion"] == settings["settingsVersion"]
+    assert latest["reviewerModel"] == "provider/edited"
+
     scanned = await client.post("/api/v1/inbox/scan", headers=_HEADERS)
     assert scanned.status_code == 200
     report = scanned.json()
@@ -259,13 +320,15 @@ async def test_setup_applies_one_project_to_multiple_repositories(
 
     updated = await client.post(
         url,
-        json={**settings, "jiraProjectKeys": ["XYZ"], "repositoryUrls": urls[1:]},
+        json={**latest, "jiraProjectKeys": ["XYZ"], "repositoryUrls": urls[1:]},
         headers=_HEADERS,
     )
     assert updated.json() == {
         "settingsVersion": "2",
         "jiraProjectKeys": ["XYZ"],
         "repositoryUrls": urls[1:],
+        "configRevision": updated.json()["configRevision"],
+        "reviewerModel": "provider/edited",
     }
     rescanned = await client.post("/api/v1/inbox/scan", headers=_HEADERS)
     assert [row["title"] for row in rescanned.json()["active"]] == ["[XYZ-1] Check"]
@@ -333,7 +396,9 @@ async def test_cli_and_http_edit_share_version_and_exact_publication(
             "UPDATE sqlite_sequence SET seq = 9007199254740992 WHERE name = 'review_runs'"
         )
     saved = store.start(selection, replaces=None).finish(
-        ReviewDraft("approved", "Original", ())
+        GeneratedReview(
+            ReviewDraft("approved", "Original", ()), "provider/model", 0.023456789
+        )
     )
     store.save(saved)
     assert saved.id == 9007199254740993
@@ -385,6 +450,10 @@ async def test_cli_and_http_edit_share_version_and_exact_publication(
     class RecoveringPublication(FakePublication):
         @override
         def submit(self, _preview: PublicationPreview) -> Literal["unknown"]:
+            assert (
+                _preview.body
+                == f"{_preview.id.marker}\n\nSaved on the web.\nSecond line."
+            )
             return "unknown"
 
         def reconcile(
@@ -427,6 +496,8 @@ async def test_cli_and_http_edit_share_version_and_exact_publication(
     history = await client.get(f"/api/v1/history/{saved.id}", headers=_HEADERS)
     assert history.json()["receipt"]["reviewId"] == "71"
     assert history.json()["selection"] == preview["selection"]
+    assert history.json()["generationModel"] == "provider/model"
+    assert history.json()["estimatedCostUsd"] == 0.023456789
     assert (await client.get(url, headers=_HEADERS)).json()["completedRunId"] == str(
         saved.id
     )
@@ -439,10 +510,12 @@ async def test_concurrent_opens_share_review_lock(
     entered = Event()
     release = Event()
 
-    def review(_self: FakeReviewer, _selection: ReviewSelection) -> ReviewDraft:
+    def review(_self: FakeReviewer, _selection: ReviewSelection) -> GeneratedReview:
         entered.set()
         assert release.wait(5)
-        return ReviewDraft("approved", "Generated once", ())
+        return GeneratedReview(
+            ReviewDraft("approved", "Generated once", ()), "provider/model", None
+        )
 
     monkeypatch.setattr(composition, "open_gh_environment", fake_gh_environment)
     monkeypatch.setattr(composition, "GhPullRequestReader", FakeReader)
@@ -504,7 +577,7 @@ async def test_mutation_envelope_before_parsing(
 def test_last_loopback_stream_disconnect_releases_browser_membership(
     tmp_path: Path,
 ) -> None:
-    workflows = Workflows(tmp_path, {})
+    workflows = Workflows(tmp_path, {}, config_path=tmp_path / "config.toml")
     watcher = workflows.inbox_watch(monotonic=lambda: 0)
     ready = Event()
 

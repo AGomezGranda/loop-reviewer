@@ -50,8 +50,8 @@ from loop_reviewer.review.store import (
     UnconfirmedPublication,
 )
 
-_RUN_COLUMNS = "id, selection, status, draft, failure, draft_version, failure_kind"
-_COMPLETION_COLUMNS = "run_id, draft_version, selection, final_draft, publication_status, github_review_id, publication_action, identity_key"
+_RUN_COLUMNS = "id, selection, status, draft, failure, draft_version, failure_kind, generation_model, estimated_cost_usd"
+_COMPLETION_COLUMNS = "run_id, draft_version, selection, final_draft, publication_status, github_review_id, publication_action, generation_model, estimated_cost_usd, identity_key"
 _UNREADABLE = "The local review database is unreadable."
 
 
@@ -210,7 +210,12 @@ class SqliteReviewRunStore:
                 return existing
             run = self._require_publication_source(connection, preview)
             completion = CompletedReview(
-                preview.source, preview.selection, run.saved_draft().draft, receipt
+                preview.source,
+                preview.selection,
+                run.saved_draft().draft,
+                receipt,
+                run.generation_model,
+                run.estimated_cost_usd,
             )
             self._update_publication(connection, record, updated)
             self._insert_completion(connection, completion)
@@ -314,8 +319,9 @@ class SqliteReviewRunStore:
         connection.execute(
             """
             INSERT INTO review_completions
-                (identity_key, run_id, draft_version, selection, final_draft, publication_status, github_review_id, publication_action)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (identity_key, run_id, draft_version, selection, final_draft, publication_status, github_review_id, publication_action,
+                 generation_model, estimated_cost_usd)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 identity_key(snapshot.selection.identity),
@@ -326,6 +332,8 @@ class SqliteReviewRunStore:
                 snapshot.publication_status,
                 None if receipt is None else receipt.review_id,
                 None if receipt is None else receipt.action,
+                snapshot.generation_model,
+                snapshot.estimated_cost_usd,
             ),
         )
 
@@ -457,10 +465,19 @@ class SqliteReviewRunStore:
                 )
             cursor = connection.execute(
                 """
-                UPDATE review_runs SET status = ?, draft = ?, failure = ?, failure_kind = ?
+                UPDATE review_runs SET status = ?, draft = ?, failure = ?, failure_kind = ?,
+                    generation_model = ?, estimated_cost_usd = ?
                 WHERE id = ? AND is_current = 1 AND status = 'running'
                 """,
-                (run.status, draft, run.failure, run.failure_kind, run.id),
+                (
+                    run.status,
+                    draft,
+                    run.failure,
+                    run.failure_kind,
+                    run.generation_model,
+                    run.estimated_cost_usd,
+                    run.id,
+                ),
             )
             if cursor.rowcount != 1:
                 raise ReviewStoreError(
@@ -518,7 +535,7 @@ def _storage_error(operation: str, error: sqlite3.Error | OSError) -> ReviewStor
 
 
 def _decode_completion(row: tuple[object, ...]) -> CompletedReview:
-    completion = completion_from_row(row[:7])
-    if identity_key(completion.selection.identity) != row[7]:
+    completion = completion_from_row(row[:-1])
+    if identity_key(completion.selection.identity) != row[-1]:
         raise ReviewStoreError(_UNREADABLE)
     return completion

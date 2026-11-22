@@ -13,6 +13,7 @@ from loop_reviewer.integrations import pi_reviewer
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
 from loop_reviewer.integrations.pi_reviewer import PiReviewer
 from loop_reviewer.review.generate import (
+    DraftReview,
     FailedReview,
     Reviewer,
     ReviewerError,
@@ -23,6 +24,7 @@ from loop_reviewer.review.generate import (
 from loop_reviewer.review.model import (
     CompletedReview,
     Finding,
+    GeneratedReview,
     ReviewAlreadyCompleted,
     ReviewDraft,
     ReviewIdentity,
@@ -142,7 +144,7 @@ class StubReviewer:
         self.interrupt = interrupt
         self.calls = 0
 
-    def review(self, selection: ReviewSelection) -> ReviewDraft:
+    def review(self, selection: ReviewSelection) -> GeneratedReview:
         self.calls += 1
         if self.interrupt:
             raise KeyboardInterrupt
@@ -150,7 +152,7 @@ class StubReviewer:
             raise self.error
         if self.on_review is not None:
             self.on_review()
-        return _DRAFT
+        return GeneratedReview(_DRAFT, "provider/model", 0.0234)
 
 
 def _app(
@@ -172,7 +174,7 @@ def _saved(store: MemoryStore, selection: ReviewSelection, status: str) -> Revie
     elif status == "abandoned":
         run = run.abandon()
     else:
-        run = run.finish(_DRAFT)
+        run = run.finish(GeneratedReview(_DRAFT, "provider/model", None))
     store.save(run)
     return run
 
@@ -498,6 +500,10 @@ def test_review_records_reviewer_failure(tmp_path: Path) -> None:
     )
     outcome = ReviewPullRequest(reader, store, StubExecution(reviewer)).run(_REF)
     assert outcome == FailedReview("Binary changes are unsupported.", "input")
+    failed = store.latest(_ORIGINAL.key)
+    assert failed is not None
+    assert failed.generation_model is None
+    assert failed.estimated_cost_usd is None
 
     reopened = SqliteReviewRunStore(path)
     assert (
@@ -505,3 +511,12 @@ def test_review_records_reviewer_failure(tmp_path: Path) -> None:
         == outcome
     )
     assert reviewer.calls == 1
+    reviewer.error = None
+    retried = ReviewPullRequest(reader, reopened, StubExecution(reviewer)).run(
+        _REF, retry=True
+    )
+    assert isinstance(retried, DraftReview)
+    assert retried.run.id != failed.id
+    assert retried.run.generation_model == "provider/model"
+    assert retried.run.estimated_cost_usd == 0.0234
+    assert reviewer.calls == 2

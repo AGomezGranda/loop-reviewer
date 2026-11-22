@@ -37,6 +37,9 @@ def test_schema_7_setup_keeps_its_project_repository_and_scan(tmp_path: Path) ->
     success = SuccessfulScan(_NOW, (_ROW,))
     assert store.record_scan(ticket, success)
     with closing(sqlite3.connect(path)) as connection, connection:
+        for table in ("review_runs", "review_completions"):
+            connection.execute(f"ALTER TABLE {table} DROP COLUMN estimated_cost_usd")
+            connection.execute(f"ALTER TABLE {table} DROP COLUMN generation_model")
         connection.execute(
             "ALTER TABLE inbox_settings RENAME COLUMN projects TO project"
         )

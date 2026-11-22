@@ -47,6 +47,8 @@ class DraftResponse(ResponseModel):
     selection: SelectionResponse
     feedback: FeedbackResponse
     publication_id: str | None
+    generation_model: str | None
+    estimated_cost_usd: float | None
 
     @classmethod
     def from_saved(
@@ -58,6 +60,8 @@ class DraftResponse(ResponseModel):
             selection=SelectionResponse.from_selection(saved.selection),
             feedback=FeedbackResponse.from_draft(saved.draft),
             publication_id=publication_id,
+            generation_model=saved.generation_model,
+            estimated_cost_usd=saved.estimated_cost_usd,
         )
 
 

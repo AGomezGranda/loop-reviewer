@@ -7,8 +7,8 @@ from typing import Literal, Protocol
 
 from loop_reviewer.review.model import (
     CompletedReview,
+    GeneratedReview,
     ReviewAlreadyCompleted,
-    ReviewDraft,
     ReviewerFailureKind,
     ReviewIdentity,
     ReviewKey,
@@ -60,7 +60,7 @@ class SavedDraftHistoryUnavailable(ReviewStoreError):
 
 
 class Reviewer(Protocol):
-    def review(self, selection: ReviewSelection) -> ReviewDraft: ...
+    def review(self, selection: ReviewSelection) -> GeneratedReview: ...
 
 
 class ReviewExecution(Protocol):
@@ -141,7 +141,7 @@ class ReviewPullRequest:
                 if not isinstance(attempt, ReviewRun):
                     return attempt
                 try:
-                    draft = reviewer.review(selection)
+                    generated = reviewer.review(selection)
                 except ReviewerError as error:
                     self._store.save(attempt.fail(str(error), error.kind))
                     return self._history(identity) or FailedReview(
@@ -150,7 +150,7 @@ class ReviewPullRequest:
                 except KeyboardInterrupt:
                     self._abandon(key, attempt.id)
                     raise
-                finished = attempt.finish(draft)
+                finished = attempt.finish(generated)
                 self._store.save(finished)
                 saved = finished.saved_draft()
 

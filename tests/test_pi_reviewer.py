@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -74,9 +75,145 @@ def _response(
     return subprocess.CompletedProcess(
         ["pi"],
         returncode,
-        json.dumps(payload),
+        _transcript(_assistant(json.dumps(payload), None)),
         _SECRET,
     )
+
+
+def _assistant(
+    text: str, total: object, *, stop: str = "stop", from_provider: bool = False
+) -> dict[str, object]:
+    return {
+        "role": "assistant",
+        "provider": "provider",
+        "model": "resolved-model",
+        "content": [
+            {"type": "thinking", "thinking": "private"},
+            {"type": "text", "text": text},
+        ],
+        "stopReason": stop,
+        "usage": {
+            "cost": {
+                "cacheRead": 0.001,
+                "total": total,
+                "totalFromProvider": from_provider,
+            }
+        },
+    }
+
+
+def _transcript(
+    *messages: dict[str, object], prompt: str = "", ended: bool = True
+) -> str:
+    events: list[dict[str, object]] = [
+        {"type": "agent_start"},
+        {
+            "type": "message_end",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}],
+            },
+        },
+    ]
+    for message in messages:
+        events.extend(
+            [
+                {
+                    "type": "message_update",
+                    "usage": message["usage"],
+                    "assistantMessageEvent": {
+                        "type": "text_delta",
+                        "contentIndex": 1,
+                        "delta": "partial",
+                    },
+                },
+                {"type": "message_end", "message": message},
+                {"type": "turn_end", "message": message, "toolResults": []},
+            ]
+        )
+    if ended:
+        events.append({"type": "agent_end", "messages": messages})
+    return "".join(json.dumps(event) + "\n" for event in events)
+
+
+@pytest.mark.parametrize(
+    ("earlier", "total", "from_provider", "expected"),
+    [
+        pytest.param([0.001], 0.023, False, 0.024, id="all-messages-priced"),
+        pytest.param([0], 0.023, False, None, id="partial-pricing"),
+        pytest.param([], 0, False, None, id="ambiguous-zero"),
+        pytest.param([], 0, True, 0, id="provider-confirmed-zero"),
+        pytest.param([], None, False, None, id="missing-rates"),
+        pytest.param([], "0.023", False, None, id="string-cost"),
+        pytest.param([], True, False, None, id="boolean-cost"),
+        pytest.param([], -1, False, None, id="negative-cost"),
+        pytest.param([], float("inf"), False, None, id="nonfinite-cost"),
+    ],
+)
+def test_pi_reads_generation_metadata(
+    tmp_path: Path,
+    earlier: list[float],
+    total: object,
+    from_provider: bool,
+    expected: float | None,
+) -> None:
+    patch = "+" + "\\" * (128 * 1024 - 2) + "\n"
+    final = _assistant(json.dumps(_payload()), total, from_provider=from_provider)
+    transcript = _transcript(
+        *(_assistant("earlier", amount, stop="toolUse") for amount in earlier),
+        final,
+        prompt=patch,
+    )
+    executable = tmp_path / "pi"
+    executable.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        "assert sys.argv[1:4] == ['--print', '--mode', 'json']\n"
+        f"assert {patch!r} in sys.stdin.read()\n"
+        f"sys.stdout.write({transcript!r})\n"
+    )
+    executable.chmod(0o700)
+    result = PiReviewer(
+        StubComparison(patch).read, "provider/model", {"PATH": str(tmp_path)}
+    ).review(_SELECTION)
+
+    assert result.draft == ReviewDraft("comment", "Summary", ())
+    assert result.model == "provider/resolved-model"
+    assert result.estimated_cost_usd == expected
+
+
+@pytest.mark.parametrize(
+    ("stop", "ended", "text", "error"),
+    [
+        pytest.param("error", True, "{}", "invalid", id="failed-final"),
+        pytest.param("length", True, "{}", "invalid", id="output-token-limit"),
+        pytest.param("stop", False, "{}", "invalid", id="missing-agent-end"),
+        pytest.param("stop", True, "é" * (32 * 1024 + 1), "oversized", id="utf8-limit"),
+    ],
+)
+def test_pi_rejects_failed_or_oversized_generation(
+    monkeypatch: pytest.MonkeyPatch, stop: str, ended: bool, text: str, error: str
+) -> None:
+    stdout = _transcript(
+        _assistant(json.dumps(_payload()), 0.02),
+        _assistant(text, 0.01, stop=stop),
+        ended=ended,
+    )
+    reviewer, _, _, _ = _install(
+        monkeypatch, subprocess.CompletedProcess(["pi"], 0, stdout)
+    )
+    with pytest.raises(ReviewerError, match=error):
+        reviewer.review(_SELECTION)
+
+
+def test_pi_uses_configured_model_when_metadata_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = _assistant(json.dumps(_payload()), 0.0234)
+    del message["model"]
+    reviewer, _, _, _ = _install(
+        monkeypatch, subprocess.CompletedProcess(["pi"], 0, _transcript(message))
+    )
+    assert reviewer.review(_SELECTION).model == "provider/model"
 
 
 def _install(
@@ -154,7 +291,7 @@ def test_pi_receives_only_selected_diff(monkeypatch: pytest.MonkeyPatch) -> None
         monkeypatch, _response(_payload()), inherited_fd=9
     )
 
-    draft = reviewer.review(_SELECTION)
+    draft = reviewer.review(_SELECTION).draft
 
     assert draft == ReviewDraft("comment", "Summary", ())
     assert comparison.calls == 1
@@ -162,6 +299,8 @@ def test_pi_receives_only_selected_diff(monkeypatch: pytest.MonkeyPatch) -> None
     assert arguments == [
         "/fake/pi",
         "--print",
+        "--mode",
+        "json",
         "--model",
         "provider/model",
         "--no-session",
@@ -249,7 +388,7 @@ def test_pi_accepts_valid_review_output(
 ) -> None:
     reviewer, _, _, _ = _install(monkeypatch, _response(payload))
 
-    assert reviewer.review(_SELECTION) == expected
+    assert reviewer.review(_SELECTION).draft == expected
 
 
 @pytest.mark.parametrize(
@@ -274,7 +413,9 @@ def test_pi_keeps_anchors_from_git_patch(
         ]
     )
     reviewer, _, calls, _ = _install(monkeypatch, _response(payload), patch=patch)
-    assert reviewer.review(_SELECTION).findings[0].location == FindingLocation(path, 2)
+    assert reviewer.review(_SELECTION).draft.findings[0].location == FindingLocation(
+        path, 2
+    )
     prompt = calls[0][1]["input"]
     assert isinstance(prompt, bytes)
     assert prompt.split(b"<diff>\n")[1].removesuffix(b"</diff>\n") == patch.encode(
@@ -352,7 +493,10 @@ def test_pi_rejects_invalid_review_output(
 ) -> None:
     stdout = payload if isinstance(payload, str) else json.dumps(payload)
     reviewer, _, _, _ = _install(
-        monkeypatch, subprocess.CompletedProcess(["pi"], 0, stdout, _SECRET)
+        monkeypatch,
+        subprocess.CompletedProcess(
+            ["pi"], 0, _transcript(_assistant(stdout, None)), _SECRET
+        ),
     )
 
     with pytest.raises(ReviewerError, match=message) as error:
@@ -402,7 +546,7 @@ def test_pi_rejects_invalid_review_output(
             id="timeout",
         ),
         pytest.param(
-            subprocess.CompletedProcess(["pi"], 0, "x" * (64 * 1024 + 1), ""),
+            subprocess.CompletedProcess(["pi"], 0, "x" * (8 * 1024 * 1024 + 1), ""),
             "provider/model",
             "/fake/pi",
             "oversized",

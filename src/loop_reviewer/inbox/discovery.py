@@ -62,6 +62,17 @@ class ConfigureInbox:
         *,
         expected_version: int | None = None,
     ) -> InboxSettings:
+        return self._store.replace_settings(
+            projects,
+            self.verify(projects, addresses),
+            expected_version=expected_version,
+        )
+
+    def verify(
+        self,
+        projects: tuple[JiraProjectKey, ...],
+        addresses: tuple[RepositoryAddress, ...],
+    ) -> tuple[WatchedRepository, ...]:
         if len(projects) != 1:
             raise ValueError(
                 "Configure exactly one Jira project key for all repositories."
@@ -77,9 +88,7 @@ class ConfigureInbox:
                 raise ValueError(
                     "Use one authenticated account per host when setting up the inbox."
                 )
-        return self._store.replace_settings(
-            projects, repositories, expected_version=expected_version
-        )
+        return repositories
 
     def settings(self) -> InboxSettings | None:
         return self._store.settings()

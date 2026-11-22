@@ -23,6 +23,8 @@ class CompletionResponse(ResponseModel):
     feedback: FeedbackResponse
     disposition: Literal["not_published", "published"]
     receipt: ReceiptResponse | None
+    generation_model: str | None
+    estimated_cost_usd: float | None
 
     @classmethod
     def from_completion(cls, completion: CompletedReview) -> CompletionResponse:
@@ -33,6 +35,8 @@ class CompletionResponse(ResponseModel):
             feedback=FeedbackResponse.from_draft(completion.final_draft),
             disposition=completion.publication_status,
             receipt=ReceiptResponse.from_receipt(completion.receipt),
+            generation_model=completion.generation_model,
+            estimated_cost_usd=completion.estimated_cost_usd,
         )
 
 

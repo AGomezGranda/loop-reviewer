@@ -346,7 +346,11 @@ export interface components {
              * @enum {string}
              */
             disposition: "not_published" | "published";
+            /** Estimatedcostusd */
+            estimatedCostUsd: number | null;
             feedback: components["schemas"]["FeedbackResponse"];
+            /** Generationmodel */
+            generationModel: string | null;
             receipt: components["schemas"]["ReceiptResponse"] | null;
             /** Runid */
             runId: string;
@@ -356,10 +360,14 @@ export interface components {
         };
         /** ConfigureInboxRequest */
         ConfigureInboxRequest: {
+            /** Configrevision */
+            configRevision: string;
             /** Jiraprojectkeys */
             jiraProjectKeys: string[];
             /** Repositoryurls */
             repositoryUrls: string[];
+            /** Reviewermodel */
+            reviewerModel?: string | null;
             /** Settingsversion */
             settingsVersion: string | null;
         };
@@ -404,7 +412,11 @@ export interface components {
         };
         /** DraftResponse */
         DraftResponse: {
+            /** Estimatedcostusd */
+            estimatedCostUsd: number | null;
             feedback: components["schemas"]["FeedbackResponse"];
+            /** Generationmodel */
+            generationModel: string | null;
             /** Publicationid */
             publicationId: string | null;
             /** Runid */
@@ -521,10 +533,14 @@ export interface components {
         };
         /** InboxConfiguration */
         InboxConfiguration: {
+            /** Configrevision */
+            configRevision: string;
             /** Jiraprojectkeys */
             jiraProjectKeys: string[];
             /** Repositoryurls */
             repositoryUrls: string[];
+            /** Reviewermodel */
+            reviewerModel: string | null;
             /** Settingsversion */
             settingsVersion: string | null;
         };
