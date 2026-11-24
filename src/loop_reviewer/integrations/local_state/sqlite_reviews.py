@@ -50,8 +50,11 @@ from loop_reviewer.review.store import (
     UnconfirmedPublication,
 )
 
-_RUN_COLUMNS = "id, selection, status, draft, failure, draft_version, failure_kind, generation_model, estimated_cost_usd"
-_COMPLETION_COLUMNS = "run_id, draft_version, selection, final_draft, publication_status, github_review_id, publication_action, generation_model, estimated_cost_usd, identity_key"
+_RUN_COLUMNS = "id, selection, status, draft, failure, draft_version, failure_kind, generation_model, estimated_cost_usd, reviewer_report"
+_COMPLETION_COLUMNS = "identity_key, run_id, draft_version, selection, final_draft, publication_status, github_review_id, publication_action, generation_model, estimated_cost_usd"
+_COMPLETION_REPORT = (
+    "(SELECT reviewer_report FROM review_runs WHERE id = review_completions.run_id)"
+)
 _UNREADABLE = "The local review database is unreadable."
 
 
@@ -99,7 +102,8 @@ class SqliteReviewRunStore:
         _require_supported_run_id(run_id)
         with self._read() as connection:
             row = connection.execute(
-                f"SELECT {_COMPLETION_COLUMNS} FROM review_completions WHERE run_id = ?",
+                f"SELECT {_COMPLETION_COLUMNS}, {_COMPLETION_REPORT} "
+                "FROM review_completions WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
             return None if row is None else _decode_completion(row)
@@ -216,6 +220,7 @@ class SqliteReviewRunStore:
                 receipt,
                 run.generation_model,
                 run.estimated_cost_usd,
+                run.report,
             )
             self._update_publication(connection, record, updated)
             self._insert_completion(connection, completion)
@@ -341,7 +346,7 @@ class SqliteReviewRunStore:
         self, connection: sqlite3.Connection, identity: ReviewIdentity
     ) -> CompletedReview | None:
         row = connection.execute(
-            f"SELECT {_COMPLETION_COLUMNS} "
+            f"SELECT {_COMPLETION_COLUMNS}, {_COMPLETION_REPORT} "
             "FROM review_completions WHERE identity_key = ?",
             (identity_key(identity),),
         ).fetchone()
@@ -445,6 +450,7 @@ class SqliteReviewRunStore:
                 "Cannot save a review attempt that is still running."
             )
         draft = None if run.draft is None else draft_json(run.draft)
+        report = None if run.report is None else run.report.model_dump_json()
         with self._write() as connection:
             row = connection.execute(
                 f"SELECT {_RUN_COLUMNS} FROM review_runs "
@@ -466,7 +472,7 @@ class SqliteReviewRunStore:
             cursor = connection.execute(
                 """
                 UPDATE review_runs SET status = ?, draft = ?, failure = ?, failure_kind = ?,
-                    generation_model = ?, estimated_cost_usd = ?
+                    generation_model = ?, estimated_cost_usd = ?, reviewer_report = ?
                 WHERE id = ? AND is_current = 1 AND status = 'running'
                 """,
                 (
@@ -476,6 +482,7 @@ class SqliteReviewRunStore:
                     run.failure_kind,
                     run.generation_model,
                     run.estimated_cost_usd,
+                    report,
                     run.id,
                 ),
             )
@@ -535,7 +542,7 @@ def _storage_error(operation: str, error: sqlite3.Error | OSError) -> ReviewStor
 
 
 def _decode_completion(row: tuple[object, ...]) -> CompletedReview:
-    completion = completion_from_row(row[:-1])
-    if identity_key(completion.selection.identity) != row[-1]:
+    completion = completion_from_row(row[1:])
+    if identity_key(completion.selection.identity) != row[0]:
         raise ReviewStoreError(_UNREADABLE)
     return completion

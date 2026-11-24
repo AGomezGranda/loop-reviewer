@@ -22,6 +22,7 @@ def main() -> None:
         origin="http://127.0.0.1",
         capability="",
         read_inbox=_offline,
+        read_cached_inbox=_offline,
         scan_inbox=_offline,
         configure_inbox=cast("ConfigureLocal", None),
         inbox_actions=cast("InboxActions[ReviewOutcome]", None),

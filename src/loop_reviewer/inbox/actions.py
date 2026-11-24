@@ -30,6 +30,8 @@ class InboxActions[ReviewResult]:
     def open(
         self, ref: PullRequestRef, *, expected_target: InboxRowTarget | None = None
     ) -> tuple[PullRequestRef, ReviewResult]:
+        if self._refresh_settings is not None:
+            self._refresh_settings()
         target = self._target(ref, expected_target)
         return target.ref, self._review(target.ref, target.identity)
 
@@ -58,8 +60,6 @@ class InboxActions[ReviewResult]:
     def _target(
         self, ref: PullRequestRef, expected_target: InboxRowTarget | None
     ) -> InboxRowTarget:
-        if self._refresh_settings is not None:
-            self._refresh_settings()
         target = self._store.resolve_row(ref)
         if expected_target is not None and expected_target != target:
             raise InboxRowChanged("The inbox row changed.")

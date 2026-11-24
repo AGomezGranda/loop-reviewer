@@ -52,6 +52,7 @@ def create_app(
     origin: str,
     capability: str,
     read_inbox: Callable[[], InboxReport],
+    read_cached_inbox: Callable[[], InboxReport],
     scan_inbox: Callable[[], InboxReport],
     configure_inbox: ConfigureLocal,
     inbox_actions: InboxActions[ReviewOutcome],
@@ -93,6 +94,7 @@ def create_app(
     api.include_router(
         inbox.routes(
             read_inbox,
+            read_cached_inbox,
             scan_inbox,
             configure_inbox,
             inbox_actions,

@@ -1,0 +1,68 @@
+[
+  {
+    "id": "test-only",
+    "split": "development",
+    "merge_base": "10b8cfdf20146cfec1add9ccf667c27ae72b56f8",
+    "head": "906a3647f3b6c2b45c432abbdb7031ddb5a1ac56",
+    "expected_coverage_count": 1,
+    "expected_changed_lines": 3,
+    "input_sha256": "5470087a7a0ef85581cac0d06e23b309fb72c028666cb220ad734671faa97a7a",
+    "diff_retrieval_bytes": 162,
+    "legacy_status": "eligible"
+  },
+  {
+    "id": "internal-refactor",
+    "split": "development",
+    "merge_base": "1cffd6aef0a9d3453860ca2f7ca9059cb53fcdd7",
+    "head": "50433eb736f3b141f5d3cfb586020c0071f7c01e",
+    "expected_coverage_count": 1,
+    "expected_changed_lines": 3,
+    "input_sha256": "3db4b29b674a9305ad9e8448c033325f8273297633aad7da3a75fde5e1af312a",
+    "diff_retrieval_bytes": 104,
+    "legacy_status": "eligible"
+  },
+  {
+    "id": "syntax-regression",
+    "split": "development",
+    "merge_base": "a948c80380c04a79a415fee30f17a09ceecf3c0d",
+    "head": "681d9d51f0c81ea2f097a335e47836e21cbb4b15",
+    "expected_coverage_count": 1,
+    "expected_changed_lines": 2,
+    "input_sha256": "167199977e41c5bb9b82942aba10cfd5f82aff46b752a89ac33aba14d874c32a",
+    "diff_retrieval_bytes": 68,
+    "legacy_status": "eligible"
+  },
+  {
+    "id": "unchanged-consumer",
+    "split": "development",
+    "merge_base": "24381d49b844eef7c55433d07246571f82efa41d",
+    "head": "4b0d16801200c2ca18656495146e26c0396df499",
+    "expected_coverage_count": 1,
+    "expected_changed_lines": 2,
+    "input_sha256": "af44b708a85e8a210b0219d66f4787b598a070a289c50d49a090b218f85f2a31",
+    "diff_retrieval_bytes": 68,
+    "legacy_status": "eligible"
+  },
+  {
+    "id": "consumer-adaptation",
+    "split": "holdout",
+    "merge_base": "7684e9c7360fa55f79a451c147cc4dae35cfce4d",
+    "head": "ae3c73d7a25ea6bd003ac52dcc4e914052570089",
+    "expected_coverage_count": 2,
+    "expected_changed_lines": 4,
+    "input_sha256": "01a3660ee322414373b64e714eeca7e24a82ba3f7405a4889b9b5f34532ad778",
+    "diff_retrieval_bytes": 221,
+    "legacy_status": "eligible"
+  },
+  {
+    "id": "generated-churn",
+    "split": "holdout",
+    "merge_base": "007eab39e957a31fdf774b7e9fda9ff5e9796402",
+    "head": "d85215c136fb0a05e1297a5491d46f5a4106d03c",
+    "expected_coverage_count": 100,
+    "expected_changed_lines": 5000,
+    "input_sha256": "e19091a486d583099acb6b8b1a19bb6d122e49aa5cda6165bcbbd0dc6703fd83",
+    "diff_retrieval_bytes": 587510,
+    "legacy_status": "unsupported_size"
+  }
+]

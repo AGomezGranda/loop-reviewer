@@ -3,7 +3,9 @@ import type { ReactNode } from "react";
 import { errorMessage } from "@/api/client";
 import { FindingCard } from "@/components/finding-card";
 import { GenerationCost } from "@/components/generation-cost";
+import { ReviewRecommendation } from "@/components/review-recommendation";
 import { ReviewedRevision } from "@/components/reviewed-revision";
+import { ReviewerReport } from "@/components/reviewer-report";
 import { Button } from "@/components/ui/button";
 import { completionQuery, historyQuery } from "./history-queries";
 
@@ -122,14 +124,12 @@ export function CompletionScreen({
 					</div>
 					<ReviewedRevision selection={item.selection} />
 					<GenerationCost {...item} />
+					<ReviewerReport report={item.report} />
 					<section className="space-y-2 rounded-lg border bg-card p-4">
 						<h2 className="font-medium">Final feedback</h2>
-						<p className="text-sm text-muted-foreground">
-							Recommendation{" "}
-							<strong className="text-foreground">
-								{item.feedback.verdict === "approved" ? "Approve" : "Comment"}
-							</strong>
-						</p>
+						{!item.report && (
+							<ReviewRecommendation verdict={item.feedback.verdict} />
+						)}
 						<p className="whitespace-pre-wrap wrap-anywhere text-sm">
 							{item.feedback.summary}
 						</p>

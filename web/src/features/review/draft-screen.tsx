@@ -5,7 +5,9 @@ import { useBeforeUnload, useBlocker } from "react-router";
 import { ApiError, errorMessage } from "@/api/client";
 import { FindingCard } from "@/components/finding-card";
 import { GenerationCost } from "@/components/generation-cost";
+import { ReviewRecommendation } from "@/components/review-recommendation";
 import { ReviewedRevision } from "@/components/reviewed-revision";
+import { ReviewerReport } from "@/components/reviewer-report";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -231,6 +233,7 @@ export function DraftScreen({
 					</a>
 					<ReviewedRevision selection={saved.selection} />
 					<GenerationCost {...saved} />
+					<ReviewerReport report={saved.report} />
 					{editor && (
 						<DraftEditor
 							editor={editor}
@@ -267,12 +270,9 @@ export function DraftScreen({
 								Edit summary
 							</Button>
 						</div>
-						<p className="text-sm text-muted-foreground">
-							Recommendation{" "}
-							<strong className="font-medium text-foreground">
-								{saved.feedback.verdict === "approved" ? "Approve" : "Comment"}
-							</strong>
-						</p>
+						{!saved.report && (
+							<ReviewRecommendation verdict={saved.feedback.verdict} />
+						)}
 						<p className="whitespace-pre-wrap wrap-anywhere text-sm">
 							{saved.feedback.summary}
 						</p>
@@ -280,7 +280,13 @@ export function DraftScreen({
 					<section className="space-y-3" aria-label="Saved findings">
 						<h2 className="font-medium">Findings</h2>
 						{saved.feedback.findings.length === 0 && (
-							<p className="text-sm text-muted-foreground">No findings.</p>
+							<p className="text-sm text-muted-foreground">
+								{saved.report?.findings.length
+									? "No retained findings."
+									: saved.report?.status === "partial"
+										? "No verified findings in the reviewed scope."
+										: "No findings."}
+							</p>
 						)}
 						{saved.feedback.findings.map((finding) => (
 							<FindingCard

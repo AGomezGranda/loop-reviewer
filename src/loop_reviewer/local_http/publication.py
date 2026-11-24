@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Annotated
 
-from fastapi import APIRouter, Path
+from fastapi import APIRouter, Depends, Path
 
 from loop_reviewer.local_http.history import CompletionResponse
 from loop_reviewer.local_http.models import (
@@ -16,6 +16,7 @@ from loop_reviewer.local_http.models import (
     SQLiteId,
 )
 from loop_reviewer.local_http.review import DraftVersion
+from loop_reviewer.local_http.session import JsonBodyRoute, require_empty_body
 from loop_reviewer.review.history import ReviewHistory
 from loop_reviewer.review.model import CompletedReview, DraftTarget, PublicationAction
 from loop_reviewer.review.publication import (
@@ -123,7 +124,7 @@ def routes(
     prepare: PreparePublication,
     publish: PublishReview,
 ) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=JsonBodyRoute)
 
     @router.post("/drafts/{runId}/publication-preview")
     def prepare_preview(
@@ -154,11 +155,15 @@ def routes(
             raise ApiError(404, "not_found", "No publication for this preview ID.")
         return PublicationResponse.from_record(record)
 
-    @router.post("/publications/{id}/confirm")
+    @router.post(
+        "/publications/{id}/confirm", dependencies=[Depends(require_empty_body)]
+    )
     def confirm(id: PublicationKey) -> PublicationResult:
         return _operate(PublicationId(id), publish.publish)
 
-    @router.post("/publications/{id}/recover")
+    @router.post(
+        "/publications/{id}/recover", dependencies=[Depends(require_empty_body)]
+    )
     def recover(id: PublicationKey) -> PublicationResult:
         return _operate(PublicationId(id), publish.recover)
 

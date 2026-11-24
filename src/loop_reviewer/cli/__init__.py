@@ -6,6 +6,7 @@ from argparse import ArgumentParser, ArgumentTypeError, Namespace
 from io import TextIOWrapper
 from pathlib import Path
 from stat import S_ISREG
+from tempfile import NamedTemporaryFile
 from time import monotonic, sleep
 
 from fastapi import FastAPI
@@ -59,6 +60,12 @@ def main() -> int:
     )
     open_command.add_argument(
         "pr_url", metavar="PR_URL", help="URL of an open, ready pull request"
+    )
+    open_command.add_argument(
+        "--discussion-snapshot",
+        type=Path,
+        metavar="PATH",
+        help="Save a private discussion snapshot for the selected revision",
     )
     review_command = commands.add_parser(
         "review", help="Generate or resume a private draft, or view completed history"
@@ -116,12 +123,34 @@ def main() -> int:
         return run_review_command(
             command, lambda: (ref, _workflows().review(ref, retry=args.retry))
         )
+    workflows = _workflows()
     try:
-        selection = _workflows().select(ref)
+        selection = workflows.select(ref)
     except (GitHubReadError, PullRequestNotReviewable) as error:
         command.exit(1, f"{command.prog}: error: {error}\n")
     print("\n".join(selection_lines(selection)))
-    return 0
+    destination = args.discussion_snapshot
+    if destination is None:
+        return 0
+    try:
+        snapshot = workflows.capture_discussion(selection)
+        if snapshot.status == "unavailable":
+            reason = snapshot.omissions[0].code
+            command.exit(1, f"{command.prog}: discussion unavailable ({reason}).\n")
+        with NamedTemporaryFile(
+            dir=destination.parent, prefix=".discussion-"
+        ) as stream:
+            stream.write(snapshot.model_dump_json().encode("utf-8"))
+            stream.flush()
+            os.link(stream.name, destination)
+    except ValueError:
+        command.exit(1, f"{command.prog}: could not capture the selected discussion.\n")
+    except FileExistsError:
+        command.exit(1, f"{command.prog}: the snapshot destination already exists.\n")
+    except OSError:
+        command.exit(1, f"{command.prog}: could not save the private snapshot.\n")
+    print(f"Discussion snapshot saved ({snapshot.status}).")
+    return 0 if snapshot.status == "complete" else 3
 
 
 def _run_ui() -> int:
@@ -134,6 +163,7 @@ def _run_ui() -> int:
             capability=capability,
             assets=assets,
             read_inbox=workflows.read_inbox,
+            read_cached_inbox=workflows.read_cached_inbox,
             scan_inbox=watcher.scan_now,
             configure_inbox=workflows.configure_inbox(),
             inbox_actions=workflows.inbox_actions(),

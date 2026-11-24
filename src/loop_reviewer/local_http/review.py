@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Body, Path
 from pydantic import Field
 
-from loop_reviewer.local_http.history import CompletionResponse
+from loop_reviewer.local_http.history import CompletionDetail
 from loop_reviewer.local_http.models import (
     ApiError,
     Feedback,
@@ -18,6 +18,7 @@ from loop_reviewer.local_http.models import (
     SelectionResponse,
     SQLiteId,
 )
+from loop_reviewer.local_http.session import JsonBodyRoute
 from loop_reviewer.review.drafts import EditReviewDraft
 from loop_reviewer.review.feedback import feedback_markdown
 from loop_reviewer.review.generate import (
@@ -34,6 +35,7 @@ from loop_reviewer.review.model import (
     SelectionChange,
 )
 from loop_reviewer.review.pull_request import PullRequestRef
+from loop_reviewer.reviewer.full_review_contract import FullReviewResult
 
 
 class OpenReview(RequestModel):
@@ -49,6 +51,7 @@ class DraftResponse(ResponseModel):
     publication_id: str | None
     generation_model: str | None
     estimated_cost_usd: float | None
+    report: FullReviewResult | None
 
     @classmethod
     def from_saved(
@@ -62,6 +65,7 @@ class DraftResponse(ResponseModel):
             publication_id=publication_id,
             generation_model=saved.generation_model,
             estimated_cost_usd=saved.estimated_cost_usd,
+            report=saved.report,
         )
 
 
@@ -74,7 +78,7 @@ class DraftOutcome(ResponseModel):
 
 class CompletedOutcome(ResponseModel):
     kind: Literal["completion"] = "completion"
-    completion: CompletionResponse
+    completion: CompletionDetail
 
 
 class FailedOutcome(ResponseModel):
@@ -108,7 +112,7 @@ def open_outcome(result: ReviewOutcome, history: ReviewHistory) -> OpenOutcome:
         )
     if isinstance(result, FinishedReview):
         return CompletedOutcome(
-            completion=CompletionResponse.from_completion(result.completion)
+            completion=CompletionDetail.from_completion(result.completion)
         )
     if isinstance(result, FailedReview):
         return FailedOutcome(message=result.message, reason=result.kind)
@@ -152,7 +156,7 @@ def routes(
     drafts: EditReviewDraft,
     history: ReviewHistory,
 ) -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(route_class=JsonBodyRoute)
 
     @router.post("/reviews/open")
     def open_review(body: OpenReview) -> OpenOutcome:
@@ -192,8 +196,8 @@ def routes(
     @router.post("/drafts/{runId}/finish")
     def finish_draft(
         run_id: Annotated[SQLiteId, Path(alias="runId")], body: DraftVersion
-    ) -> CompletionResponse:
-        return CompletionResponse.from_completion(
+    ) -> CompletionDetail:
+        return CompletionDetail.from_completion(
             drafts.finish_locally(DraftTarget(int(run_id), int(body.version)))
         )
 

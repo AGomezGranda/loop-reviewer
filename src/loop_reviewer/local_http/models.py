@@ -10,10 +10,10 @@ from loop_reviewer.review.model import (
     MAX_STORED_INTEGER,
     PublicationAction,
     PublicationReceipt,
+    Recommendation,
     ReviewDraft,
     ReviewSelection,
     Severity,
-    Verdict,
 )
 from loop_reviewer.review.publication_model import PublicationError, PublicationId
 
@@ -96,10 +96,11 @@ class FindingResponse(ResponseModel):
     consequence: str
     path: str | None
     line: str | None
+    report_id: str | None
 
 
 class FeedbackResponse(ResponseModel):
-    verdict: Verdict
+    verdict: Recommendation
     summary: str
     findings: list[FindingResponse]
 
@@ -116,6 +117,7 @@ class FeedbackResponse(ResponseModel):
                     consequence=finding.consequence,
                     path=finding.location.path if finding.location else None,
                     line=str(finding.location.right_line) if finding.location else None,
+                    report_id=finding.report_id,
                 )
                 for number, finding in enumerate(draft.ordered_findings(), start=1)
             ],

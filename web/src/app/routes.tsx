@@ -100,6 +100,10 @@ function DraftRoute() {
 					runId={draft.runId}
 					version={draft.version}
 					disabled={disabled}
+					warnPartial={
+						draft.report?.status === "partial" &&
+						draft.feedback.findings.length === 0
+					}
 					onConflict={() =>
 						void cache.invalidateQueries({
 							queryKey: draftQuery(runId).queryKey,

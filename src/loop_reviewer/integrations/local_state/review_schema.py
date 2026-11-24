@@ -64,3 +64,7 @@ def add_generation_metadata(connection: sqlite3.Connection, _from_version: int) 
             f"ALTER TABLE {table} ADD COLUMN estimated_cost_usd REAL "
             "CHECK (estimated_cost_usd >= 0)"
         )
+
+
+def add_reviewer_report(connection: sqlite3.Connection, _from_version: int) -> None:
+    connection.execute("ALTER TABLE review_runs ADD COLUMN reviewer_report TEXT")

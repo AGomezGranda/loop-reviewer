@@ -6,7 +6,7 @@ import subprocess
 import sys
 import sysconfig
 from collections.abc import Callable
-from contextlib import redirect_stdout
+from contextlib import AbstractContextManager, nullcontext, redirect_stdout
 from dataclasses import replace
 from io import StringIO
 from pathlib import Path
@@ -47,6 +47,7 @@ from loop_reviewer.review.selection import (
     PullRequestReader,
 )
 from loop_reviewer.review.store import ReviewStoreError
+from loop_reviewer.reviewer.inventory_contract import PinnedComparison
 
 
 @pytest.fixture(autouse=True)
@@ -222,7 +223,7 @@ def _run_review(
     monkeypatch.setattr(composition, "GhPullRequestReader", build_reader, raising=False)
     monkeypatch.setattr(composition, "SqliteReviewRunStore", build_store, raising=False)
     monkeypatch.setattr(
-        composition, "LockedPiExecution", build_execution, raising=False
+        composition, "LockedReviewExecution", build_execution, raising=False
     )
     monkeypatch.setattr(
         composition, "ReviewPullRequest", build_application, raising=False
@@ -276,10 +277,9 @@ def test_cli_open_does_not_construct_review_state(
         return StubReader(None)
 
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
-    monkeypatch.delenv("LOOP_REVIEWER_PI_MODEL", raising=False)
     monkeypatch.setattr(composition, "SqliteReviewRunStore", forbidden, raising=False)
-    monkeypatch.setattr(composition, "LockedPiExecution", forbidden, raising=False)
-    monkeypatch.setattr(composition, "PiReviewer", forbidden, raising=False)
+    monkeypatch.setattr(composition, "LockedReviewExecution", forbidden, raising=False)
+    monkeypatch.setattr(composition, "HostedReportReviewer", forbidden)
     monkeypatch.setattr(composition, "GhPullRequestReader", build_reader, raising=False)
     monkeypatch.setattr(sys, "argv", ["loop-reviewer", "open", _URL])
 
@@ -519,14 +519,10 @@ def test_cli_review_reports_interruption(
     assert next_step in captured.err
 
 
-@pytest.mark.parametrize(
-    "override", [None, "provider/override"], ids=["toml-model", "environment-override"]
-)
-def test_cli_review_wires_state_and_model(
+def test_cli_review_wires_state_and_lock(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
-    override: str | None,
 ) -> None:
     state = tmp_path / "state"
     recorded: dict[str, object] = {}
@@ -548,46 +544,20 @@ def test_cli_review_wires_state_and_model(
     ) -> StubApplication:
         return StubApplication(UnavailableReview("in_progress"), recorded, None)
 
-    class StubComparison:
-        def read(self, selection: object) -> str:
-            return ""
-
-    def build_git(environment: dict[str, str], *, inherited_fd: int) -> StubComparison:
-        recorded["git_environment"] = environment
+    def build_git(environment: dict[str, str], *, inherited_fd: int) -> object:
         recorded["git_inherited_fd"] = inherited_fd
-        return StubComparison()
-
-    def build_pi(
-        comparison: object,
-        model: str | None,
-        environment: dict[str, str],
-        *,
-        inherited_fd: int | None = None,
-    ) -> object:
-        assert callable(comparison)
-        recorded["model"] = model
-        recorded["inherited_fd"] = inherited_fd
         return object()
 
     monkeypatch.setenv("XDG_STATE_HOME", str(state))
-    config = tmp_path / "config" / "loop-reviewer" / "config.toml"
-    config.parent.mkdir(parents=True)
-    config.write_text('[reviewer]\nengine = "pi"\nmodel = "provider/model"\n')
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(config.parent.parent))
-    if override is None:
-        monkeypatch.delenv("LOOP_REVIEWER_PI_MODEL", raising=False)
-    else:
-        monkeypatch.setenv("LOOP_REVIEWER_PI_MODEL", override)
     monkeypatch.setattr(composition, "GhPullRequestReader", build_reader, raising=False)
     monkeypatch.setattr(composition, "SqliteReviewRunStore", build_store, raising=False)
     monkeypatch.setattr(
-        composition, "LockedPiExecution", build_execution, raising=False
+        composition, "LockedReviewExecution", build_execution, raising=False
     )
     monkeypatch.setattr(
         composition, "ReviewPullRequest", build_application, raising=False
     )
     monkeypatch.setattr(composition, "GitComparison", build_git, raising=False)
-    monkeypatch.setattr(composition, "PiReviewer", build_pi, raising=False)
     monkeypatch.setattr(sys, "argv", ["loop-reviewer", "review", _URL])
 
     assert cli.main() == 1
@@ -597,11 +567,7 @@ def test_cli_review_wires_state_and_model(
 
     assert recorded["db"] == state / "loop-reviewer" / "reviews.sqlite3"
     assert recorded["locks"] == state / "loop-reviewer" / "locks"
-    assert recorded["model"] == (override or "provider/model")
-    config.write_text('[reviewer]\nmodel = "provider/changed"\n')
-    factory(7)
-    assert recorded["model"] == (override or "provider/changed")
-    assert recorded["inherited_fd"] == recorded["git_inherited_fd"] == 7
+    assert recorded["git_inherited_fd"] == 7
     assert capsys.readouterr().err.startswith("A review is already in progress")
 
 
@@ -612,15 +578,14 @@ def _invoke(monkeypatch: pytest.MonkeyPatch, *options: str) -> int:
 
 def _local_store(monkeypatch: pytest.MonkeyPatch, path: Path) -> SqliteReviewRunStore:
     monkeypatch.setenv("XDG_STATE_HOME", str(path))
-    monkeypatch.delenv("LOOP_REVIEWER_PI_MODEL", raising=False)
 
     def forbidden(*args: object, **kwargs: object) -> object:
         raise AssertionError("local drafts must not construct external collaborators")
 
     for collaborator in (
         "GhPullRequestReader",
-        "PiReviewer",
-        "LockedPiExecution",
+        "HostedReportReviewer",
+        "LockedReviewExecution",
         "GitComparison",
     ):
         monkeypatch.setattr(composition, collaborator, forbidden)
@@ -718,6 +683,37 @@ class _PublicationGitHub:
         )
 
 
+@pytest.mark.parametrize(
+    "allowance", ["invalid", "3000001"], ids=["not-an-integer", "over-limit"]
+)
+def test_invalid_model_allowance_fails_before_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    allowance: str,
+) -> None:
+    remote = _PublicationGitHub()
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("LOOP_REVIEWER_MAX_MODEL_SPEND_USD_MICROS", allowance)
+    monkeypatch.setattr(
+        "loop_reviewer.integrations.gh_api.subprocess.run", remote.ordinary_read
+    )
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("Invalid allowance must not start analysis or discussion capture")
+
+    monkeypatch.setattr(composition.Workflows, "capture_discussion", forbidden)
+    monkeypatch.setattr(
+        composition.GitComparison, "open_verified_repository", forbidden
+    )
+    assert _invoke(monkeypatch, "review", _URL) == 1
+    assert "LOOP_REVIEWER_MAX_MODEL_SPEND_USD_MICROS" in capsys.readouterr().err
+    store = SqliteReviewRunStore(tmp_path / "loop-reviewer" / "reviews.sqlite3")
+    selection = replace(_SELECTION, ref=replace(_SELECTION.ref, repository_id=123))
+    saved = store.latest(selection.key)
+    assert saved is not None and saved.failure_kind == "setup"
+
+
 def test_review_pins_reads_and_fetch_then_checks_current_account(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -741,6 +737,7 @@ def test_review_pins_reads_and_fetch_then_checks_current_account(
         config = Path(env["GH_CONFIG_DIR"])
         assert list(config.iterdir()) == []
         configs.add(config)
+        assert "OPENAI_API_KEY" not in env
         remote.actor = env["GH_ENTERPRISE_TOKEN"]
         reads.append(remote.actor)
         if args[-1] == "user":
@@ -751,39 +748,53 @@ def test_review_pins_reads_and_fetch_then_checks_current_account(
         def __init__(self, environment: dict[str, str], *, inherited_fd: int) -> None:
             self.environment = environment
 
-        def read(self, selection: ReviewSelection) -> str:
+        def open_verified_repository(
+            self, selection: ReviewSelection
+        ) -> nullcontext[Path]:
             config = Path(self.environment["GH_CONFIG_DIR"])
             assert config in configs and config.is_dir()
             fetched.append(self.environment["GH_ENTERPRISE_TOKEN"])
             assert selection.account == "reviewer"
-            return "pinned diff"
+            return nullcontext(tmp_path)
+
+    def open_source(
+        path: Path, pins: PinnedComparison, environment: dict[str, str]
+    ) -> nullcontext[Path]:
+        assert path == tmp_path
+        assert set(environment) == {"PATH"}
+        assert pins.head == _REVISION.head
+        return nullcontext(path)
 
     class Reviewer:
         def __init__(
             self,
-            comparison: Callable[[ReviewSelection], str],
-            model: str | None,
-            environment: dict[str, str],
-            *,
-            inherited_fd: int,
+            source: Callable[
+                [ReviewSelection, PinnedComparison], AbstractContextManager[Path]
+            ],
+            *args: object,
         ) -> None:
-            assert environment.get("GH_CONFIG_DIR") == str(tmp_path)
-            self.comparison = comparison
+            self.source = source
 
         def review(self, selection: ReviewSelection) -> GeneratedReview:
-            assert self.comparison(selection) == "pinned diff"
+            with self.source(
+                selection,
+                PinnedComparison(merge_base=_REVISION.merge_base, head=_REVISION.head),
+            ) as path:
+                assert path == tmp_path
             return GeneratedReview(
                 ReviewDraft("comment", "Reviewed.", ()), "provider/model", 0.0234
             )
 
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-secret")
     monkeypatch.setattr(
         "loop_reviewer.integrations.github_credentials.capture_review_process", capture
     )
     monkeypatch.setattr("loop_reviewer.integrations.gh_api.subprocess.run", read)
     monkeypatch.setattr(composition, "GitComparison", Comparison)
-    monkeypatch.setattr(composition, "PiReviewer", Reviewer)
+    monkeypatch.setattr(composition, "open_local_comparison", open_source)
+    monkeypatch.setattr(composition, "HostedReportReviewer", Reviewer)
     assert _invoke(monkeypatch, "review", _URL) == 0
     assert reads == ["reviewer"] * 4 + ["other"] * 4
     assert fetched == ["reviewer"]
@@ -801,7 +812,6 @@ def publication_fixture(
 ) -> tuple[_PublicationGitHub, SqliteReviewRunStore, ReviewRun]:
     remote = _PublicationGitHub()
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    monkeypatch.delenv("LOOP_REVIEWER_PI_MODEL", raising=False)
     monkeypatch.setattr(
         "loop_reviewer.integrations.github_credentials.capture_review_process",
         remote.call,
@@ -813,10 +823,10 @@ def publication_fixture(
         "loop_reviewer.integrations.gh_api.subprocess.run", remote.ordinary_read
     )
 
-    def no_pi(*args: object, **kwargs: object) -> None:
-        pytest.fail("publication must not construct Pi")
+    def no_reviewer(*args: object, **kwargs: object) -> None:
+        pytest.fail("publication must not construct a reviewer")
 
-    monkeypatch.setattr(composition, "PiReviewer", no_pi)
+    monkeypatch.setattr(composition, "HostedReportReviewer", no_reviewer)
     store = SqliteReviewRunStore(tmp_path / "loop-reviewer" / "reviews.sqlite3")
     selection = replace(_SELECTION, ref=replace(_SELECTION.ref, repository_id=123))
     run = store.start(selection, replaces=None).finish(
@@ -1154,7 +1164,7 @@ def test_edit_accepts_utf8_text_line_endings(
     assert receipt.err == "" and "Résumé\nSecond line" in receipt.out
     edited = store.get_draft(original.id)
     assert edited is not None and edited.draft == ReviewDraft(
-        "comment", "Résumé\nSecond line", ()
+        "comment", "Résumé\nSecond line", (), summary_origin="edited"
     )
 
 
@@ -1359,7 +1369,7 @@ def test_finishes_saved_draft_privately_and_reopens_history(
     repo: str,
     priced: bool,
 ) -> None:
-    execution = composition.LockedPiExecution
+    execution = composition.LockedReviewExecution
     store = _local_store(monkeypatch, tmp_path)
     self_review = replace(
         _SELECTION,
@@ -1483,7 +1493,7 @@ def test_finishes_saved_draft_privately_and_reopens_history(
         )
 
     monkeypatch.setattr(composition, "GhPullRequestReader", GhPullRequestReader)
-    monkeypatch.setattr(composition, "LockedPiExecution", execution)
+    monkeypatch.setattr(composition, "LockedReviewExecution", execution)
     monkeypatch.setattr(subprocess, "run", github_get)
     assert (
         _invoke(monkeypatch, "review", f"https://git.example.com/acme/{repo}/pull/7")

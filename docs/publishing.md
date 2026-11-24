@@ -1,6 +1,6 @@
 # Publish or recover a GitHub review
 
-Publishing uses a saved [review draft](reviewing.md), not Pi. Sign in with `gh` as the account listed on the draft. Each publication operation verifies the account using a single captured credential and uses the standard GitHub REST endpoint for the PR host; custom `gh` `api_host` overrides do not apply. Keep the [state directory and locks](local-state.md) on a local filesystem on macOS or Linux.
+Publishing uses a saved [review draft](reviewing.md) without rerunning analysis. Sign in with `gh` as the account listed on the draft. Each publication operation verifies the account using a single captured credential and uses the standard GitHub REST endpoint for the PR host; custom `gh` `api_host` overrides do not apply. Keep the [state directory and locks](local-state.md) on a local filesystem on macOS or Linux.
 
 ## Preview, then confirm
 
@@ -10,7 +10,7 @@ Choose **Comment** or **Approve** in the browser and select **Prepare preview**,
 loop-reviewer publish preview RUN_ID --version VERSION --action comment
 ```
 
-The action is your choice, not the draft’s recommendation. You can’t approve your own PR; publish a comment or [finish locally](reviewing.md#finish-privately-or-publish) instead.
+The action is your choice, not the reviewer’s original recommendation. Review any coverage gaps before approving an empty partial draft. An explicit approval without feedback uses the neutral body `Review submitted for the pinned revision.` An empty comment requires your own text. The private report is never rendered into the preview. You can’t approve your own PR; publish a comment or [finish locally](reviewing.md#finish-privately-or-publish) instead.
 
 Previewing doesn’t post anything. Inspect the exact review body, inline comments, and the reviewed target branch, merge base, and head. Unverifiable inline locations fall back to the body before you confirm. Use `--summary-only` (or **Summary only** in the browser) to put every retained finding in the body.
 

@@ -29,6 +29,7 @@ const draft: Draft = {
 				severity: "high",
 				condition: "First condition",
 				consequence: "First consequence",
+				reportId: null,
 				path: null,
 				line: null,
 			},
@@ -37,6 +38,7 @@ const draft: Draft = {
 				severity: "low",
 				condition: "Second condition",
 				consequence: "Second consequence",
+				reportId: null,
 				path: null,
 				line: null,
 			},
@@ -45,6 +47,7 @@ const draft: Draft = {
 	publicationId: null,
 	generationModel: null,
 	estimatedCostUsd: null,
+	report: null,
 };
 
 beforeEach(() => sessionStorage.setItem("loop-reviewer.capability", "test"));
@@ -104,6 +107,22 @@ test.each([
 	mount();
 	await screen.findByText(label);
 	if (generationModel) await screen.findByText(generationModel);
+});
+
+test("an empty report draft does not recommend approval or comment", async () => {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () =>
+			Response.json({
+				...draft,
+				feedback: { verdict: "none", summary: "", findings: [] },
+			}),
+		),
+	);
+	mount();
+	await screen.findByText("Coverage unavailable for this legacy review.");
+	await screen.findByText("Original recommendation");
+	await screen.findByText("None");
 });
 
 test("a conflicting edit retains the input and requires selection at the new version", async () => {

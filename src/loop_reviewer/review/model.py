@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Literal, Self, TypeIs
+from typing import TYPE_CHECKING, Literal, Self, TypeIs
 from unicodedata import category
 
 from loop_reviewer.review.pull_request import (
@@ -12,8 +12,13 @@ from loop_reviewer.review.pull_request import (
     ReviewedRevision,
 )
 
+if TYPE_CHECKING:
+    from loop_reviewer.reviewer.full_review_contract import FullReviewResult
+
 Severity = Literal["high", "medium", "low"]
 Verdict = Literal["approved", "comment"]
+Recommendation = Literal["approved", "comment", "none"]
+SummaryOrigin = Literal["legacy", "generated", "edited"]
 PublicationAction = Literal["comment", "approve"]
 
 
@@ -84,6 +89,10 @@ class DraftVersionMismatch(RunTransitionError):
     pass
 
 
+class ReportAssociationError(RunTransitionError):
+    pass
+
+
 class ReviewAlreadyCompleted(Exception):
     def __init__(self, completion: CompletedReview) -> None:
         self.completion = completion
@@ -143,30 +152,42 @@ class Finding:
     condition: str
     consequence: str
     location: FindingLocation | None
+    report_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.severity not in _SEVERITY_ORDER:
             raise DraftValidationError("Invalid finding severity.")
         _validate_feedback(self.condition)
         _validate_feedback(self.consequence)
+        if self.report_id is not None:
+            _validate_feedback(self.report_id)
 
 
 @dataclass(frozen=True)
 class ReviewDraft:
-    verdict: Verdict
+    verdict: Recommendation
     summary: str
     findings: tuple[Finding, ...]
+    summary_origin: SummaryOrigin = "legacy"
 
     def __post_init__(self) -> None:
-        if self.verdict not in {"approved", "comment"}:
+        if self.verdict not in {"approved", "comment", "none"} or (
+            self.verdict == "none" and self.summary_origin == "legacy"
+        ):
             raise DraftValidationError("Invalid review verdict.")
-        _validate_feedback(self.summary)
+        if self.summary_origin not in {"legacy", "generated", "edited"}:
+            raise DraftValidationError("Invalid summary origin.")
+        if self.summary_origin == "generated":
+            if self.summary:
+                raise DraftValidationError("A generated summary must be empty.")
+        else:
+            _validate_feedback(self.summary)
 
     def ordered_findings(self) -> tuple[Finding, ...]:
         return tuple(self.findings[index] for index in self._ordered_indices())
 
     def replace_summary(self, text: str) -> Self:
-        return replace(self, summary=text)
+        return replace(self, summary=text, summary_origin="edited")
 
     def edit_finding(
         self, number: int, *, condition: str | None, consequence: str | None
@@ -194,15 +215,17 @@ class ReviewDraft:
     def require_edit_of(self, original: ReviewDraft) -> None:
         if self.verdict != original.verdict:
             raise DraftValidationError("Edits must preserve the review verdict.")
+        if self.summary_origin not in (original.summary_origin, "edited"):
+            raise DraftValidationError("Edits cannot reset the summary origin.")
         remaining = iter(original.findings)
         for retained in self.findings:
             if not any(
-                (candidate.severity, candidate.location)
-                == (retained.severity, retained.location)
+                (candidate.severity, candidate.location, candidate.report_id)
+                == (retained.severity, retained.location, retained.report_id)
                 for candidate in remaining
             ):
                 raise DraftValidationError(
-                    "Edits must preserve the severity, location and order of retained findings."
+                    "Edits must preserve the identity, severity, location and order of retained findings."
                 )
 
     def _ordered_indices(self) -> list[int]:
@@ -262,11 +285,59 @@ class ReviewSelection:
         return tuple(changes)
 
 
+def require_report_association(
+    report: FullReviewResult | None, selection: ReviewSelection, draft: ReviewDraft
+) -> None:
+    if report is None:
+        if (
+            draft.summary_origin == "generated"
+            or draft.verdict == "none"
+            or any(finding.report_id is not None for finding in draft.findings)
+        ):
+            raise ReportAssociationError(
+                "Report-derived feedback requires its original report."
+            )
+        return
+    original = report.root
+    revision = selection.revision
+    if (
+        original.status == "failed"
+        or (original.comparison.merge_base, original.comparison.head)
+        != (revision.merge_base, revision.head)
+        or original.recommendation != draft.verdict
+        or draft.summary_origin == "legacy"
+    ):
+        raise ReportAssociationError(
+            "The reviewer report does not match the draft and pinned comparison."
+        )
+    if original.discussion is not None:
+        target, ref = original.discussion.target, selection.ref
+        if (target.host, target.repository_id, target.number, target.target_branch) != (
+            ref.host,
+            ref.repository_id,
+            ref.number,
+            revision.target_branch,
+        ):
+            raise ReportAssociationError(
+                "The reviewer report names a different discussion target."
+            )
+    remaining = iter(original.findings)
+    for retained in draft.findings:
+        if not any(
+            (item.id, item.severity) == (retained.report_id, retained.severity)
+            for item in remaining
+        ):
+            raise ReportAssociationError(
+                "The draft findings do not match the original report."
+            )
+
+
 @dataclass(frozen=True)
 class GeneratedReview:
     draft: ReviewDraft
-    model: str
+    model: str | None
     estimated_cost_usd: float | None
+    report: FullReviewResult | None = None
 
 
 @dataclass(frozen=True)
@@ -277,6 +348,7 @@ class SavedDraft:
     draft: ReviewDraft
     generation_model: str | None = None
     estimated_cost_usd: float | None = None
+    report: FullReviewResult | None = None
 
 
 @dataclass(frozen=True)
@@ -287,6 +359,7 @@ class CompletedReview:
     receipt: PublicationReceipt | None = None
     generation_model: str | None = None
     estimated_cost_usd: float | None = None
+    report: FullReviewResult | None = None
 
     @property
     def publication_status(self) -> Literal["not_published", "published"]:
@@ -309,12 +382,15 @@ class ReviewRun:
     failure_kind: ReviewerFailureKind | None = None
     generation_model: str | None = None
     estimated_cost_usd: float | None = None
+    report: FullReviewResult | None = None
 
     def __post_init__(self) -> None:
         if (self.status == "draft_ready") != (self.draft is not None):
             raise RunTransitionError("The review attempt has an inconsistent draft.")
         if self.draft is None and (
-            self.generation_model is not None or self.estimated_cost_usd is not None
+            self.generation_model is not None
+            or self.estimated_cost_usd is not None
+            or self.report is not None
         ):
             raise RunTransitionError(
                 "The review attempt has inconsistent generation metadata."
@@ -329,6 +405,9 @@ class ReviewRun:
             raise RunTransitionError(
                 "The review attempt has an inconsistent draft version."
             )
+
+        if self.draft is not None:
+            require_report_association(self.report, self.selection, self.draft)
 
     @property
     def draft_target(self) -> DraftTarget:
@@ -354,6 +433,7 @@ class ReviewRun:
             self.draft,
             self.generation_model,
             self.estimated_cost_usd,
+            self.report,
         )
 
     def complete_locally(self) -> CompletedReview:
@@ -365,6 +445,7 @@ class ReviewRun:
             self.draft,
             generation_model=self.generation_model,
             estimated_cost_usd=self.estimated_cost_usd,
+            report=self.report,
         )
 
     def finish(self, generated: GeneratedReview) -> Self:
@@ -376,6 +457,7 @@ class ReviewRun:
             failure=None,
             generation_model=generated.model,
             estimated_cost_usd=generated.estimated_cost_usd,
+            report=generated.report,
         )
 
     def fail(self, message: str, kind: ReviewerFailureKind) -> Self:

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from loop_reviewer.inbox.model import JiraProjectKey, RepositoryAddress
+from loop_reviewer.inbox.model import InboxSettings, JiraProjectKey, RepositoryAddress
 from loop_reviewer.inbox.store import InboxStoreError
 
 
@@ -17,7 +17,28 @@ class LocalSettings:
     addresses: tuple[RepositoryAddress, ...]
     version: int | None
     revision: str
-    model: str | None
+
+
+type InboxInputs = tuple[tuple[JiraProjectKey, ...], tuple[RepositoryAddress, ...]]
+
+
+def saved_inbox_inputs(saved: InboxSettings | None) -> InboxInputs:
+    if saved is None:
+        return (), ()
+    return saved.projects, tuple(repo.address for repo in saved.repositories)
+
+
+def verify_inbox_on_save(
+    requested: InboxInputs,
+    current: LocalSettings,
+) -> bool:
+    if not any(requested):
+        if current.projects:
+            raise ValueError(
+                "Configure a Jira project key and at least one repository."
+            )
+        return False
+    return True
 
 
 class ConfigureLocal(Protocol):
@@ -30,5 +51,4 @@ class ConfigureLocal(Protocol):
         *,
         expected_version: int | None = None,
         expected_revision: str | None = None,
-        model: str | None = None,
     ) -> LocalSettings: ...

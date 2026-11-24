@@ -1,0 +1,39 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "enum": [
+        1
+      ],
+      "type": "integer"
+    },
+    "candidate_id": {
+      "type": "string"
+    },
+    "assessment": {
+      "enum": [
+        "supports",
+        "contradicts",
+        "insufficient_evidence"
+      ],
+      "type": "string"
+    },
+    "evidence_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "explanation": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "assessment",
+    "evidence_ids",
+    "explanation"
+  ],
+  "type": "object"
+}

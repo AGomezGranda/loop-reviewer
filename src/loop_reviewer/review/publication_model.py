@@ -12,6 +12,7 @@ from loop_reviewer.review.model import (
     FindingLocation,
     PublicationAction,
     PublicationReceipt,
+    ReviewDraft,
     ReviewSelection,
     SavedDraft,
 )
@@ -148,9 +149,27 @@ def build_preview(
     action: PublicationAction,
     anchors: frozenset[FindingLocation],
 ) -> PublicationPreview:
+    require_action(action, selection.account, selection.author)
+    text, comments = _editable_payload(saved.draft, action, anchors)
+    return PublicationPreview(
+        id,
+        DraftTarget(saved.id, saved.draft_version),
+        selection,
+        actor_id,
+        action,
+        f"{id.marker}\n\n{text}",
+        comments,
+    )
+
+
+def _editable_payload(
+    draft: ReviewDraft,
+    action: PublicationAction,
+    anchors: frozenset[FindingLocation],
+) -> tuple[str, tuple[InlineComment, ...]]:
     inline: dict[FindingLocation, list[str]] = {}
     fallback: list[str] = []
-    for finding in saved.draft.ordered_findings():
+    for finding in draft.ordered_findings():
         location = finding.location
         if location is not None and location in anchors:
             inline.setdefault(location, []).append(
@@ -158,20 +177,18 @@ def build_preview(
             )
         else:
             fallback.append(_finding_block(finding, location=location))
-    body = f"{id.marker}\n\n{saved.draft.summary}"
+    sections = [draft.summary] if draft.summary else []
     if fallback:
-        body += "\n\n## Findings\n\n" + "\n\n".join(fallback)
-    return PublicationPreview(
-        id,
-        DraftTarget(saved.id, saved.draft_version),
-        selection,
-        actor_id,
-        action,
-        body,
-        tuple(
-            InlineComment(loc.path, loc.right_line, "\n\n".join(blocks))
-            for loc, blocks in inline.items()
-        ),
+        sections.append("## Findings\n\n" + "\n\n".join(fallback))
+    if not sections:
+        if action == "comment" and not inline:
+            raise PublicationError(
+                "Add comment text before publishing an empty review."
+            )
+        sections.append("Review submitted for the pinned revision.")
+    return "\n\n".join(sections), tuple(
+        InlineComment(loc.path, loc.right_line, "\n\n".join(blocks))
+        for loc, blocks in inline.items()
     )
 
 

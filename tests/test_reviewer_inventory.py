@@ -1,14 +1,13 @@
 import json
 from collections.abc import Generator
 from contextlib import contextmanager
-from pathlib import Path
 from typing import cast
 
 import pytest
 from pydantic import ValidationError
 
-from loop_reviewer.review.inventory import InventorySourceError, review_inventory
-from loop_reviewer.review.inventory_contract import (
+from loop_reviewer.reviewer.inventory import InventorySourceError, review_inventory
+from loop_reviewer.reviewer.inventory_contract import (
     ChangedFile,
     FileSide,
     PinnedComparison,
@@ -107,14 +106,6 @@ def test_inventory_contract_rejects_invalid_payloads(
         model.model_validate_json(json.dumps(payload | overrides))
 
 
-def test_inventory_schemas_match_checked_in_artifacts() -> None:
-    schemas = Path(__file__).resolve().parents[1] / "docs" / "schemas"
-    for model, name in ((ReviewerRequest, "request"), (ReviewerResult, "result")):
-        assert (schemas / f"reviewer-{name}-v1.json").read_text() == (
-            json.dumps(model.model_json_schema(), indent=2) + "\n"
-        )
-
-
 def added(path: str) -> ChangedFile:
     return ChangedFile(
         change_type="added",
@@ -139,9 +130,6 @@ class Source:
 
     def inventory(self) -> tuple[ChangedFile, ...]:
         return self.rows
-
-    def read_blob(self, *args: object, **kwargs: object) -> bytes:
-        raise AssertionError("Inventory must never read blobs")
 
 
 def test_inventory_reports_all_rows_in_stable_order() -> None:

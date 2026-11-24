@@ -26,7 +26,6 @@ function SetupForm({
 		() => ({
 			version: initial.settingsVersion,
 			revision: initial.configRevision,
-			model: initial.reviewerModel ?? "",
 			project: initial.jiraProjectKeys.join(", "),
 			repositories: (initial.repositoryUrls.length
 				? initial.repositoryUrls
@@ -36,7 +35,7 @@ function SetupForm({
 		[initial],
 	);
 	const [edits, setEdits] = useState<typeof pristine | null>(null);
-	const { version, revision, model, project, repositories } = edits ?? pristine;
+	const { version, revision, project, repositories } = edits ?? pristine;
 	const hasInbox =
 		Boolean(pristine.project || project.trim()) ||
 		repositories.some((row) => row.url.trim());
@@ -63,11 +62,9 @@ function SetupForm({
 			save.error.details.code === "inbox_changed");
 	const busy = save.isPending || reload.isPending;
 	function change(
-		fields: Partial<
-			Pick<typeof pristine, "model" | "project" | "repositories">
-		>,
+		fields: Partial<Pick<typeof pristine, "project" | "repositories">>,
 	) {
-		setEdits({ version, revision, model, project, repositories, ...fields });
+		setEdits({ version, revision, project, repositories, ...fields });
 		if (!conflict) save.reset();
 	}
 
@@ -80,7 +77,6 @@ function SetupForm({
 				save.mutate({
 					settingsVersion: version,
 					configRevision: revision,
-					reviewerModel: model.trim(),
 					jiraProjectKeys: hasInbox ? [project.trim()] : [],
 					repositoryUrls: hasInbox
 						? repositories.map((row) => row.url.trim())
@@ -208,29 +204,6 @@ function SetupForm({
 					value={project}
 					onChange={(event) => {
 						change({ project: event.target.value });
-					}}
-				/>
-			</div>
-
-			<div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
-				<div>
-					<label className="text-sm font-medium" htmlFor="reviewer-model">
-						Pi reviewer model
-					</label>
-					<p id="model-format" className="text-xs text-muted-foreground">
-						Use PROVIDER/MODEL for new drafts.
-					</p>
-				</div>
-				<Input
-					id="reviewer-model"
-					aria-describedby="model-format"
-					className="w-64 bg-background font-mono"
-					placeholder="PROVIDER/MODEL"
-					spellCheck={false}
-					disabled={busy}
-					value={model}
-					onChange={(event) => {
-						change({ model: event.target.value });
 					}}
 				/>
 			</div>

@@ -1,12 +1,13 @@
 # loop-reviewer
 
-Loop-reviewer is a local GitHub PR review tool. The Python CLI and the FastAPI-served React workspace share drafts, inbox settings and scans, and review history through local SQLite state. GitHub reads and publication use `gh` credentials, Git prepares the selected comparison, and Pi generates the private draft. Follow-up verification of earlier findings is planned in ADR 0002 and is still pending.
+Loop-reviewer is a local GitHub PR review tool. The Python CLI and the FastAPI-served React workspace share drafts, inbox settings and scans, and review history through local SQLite state. GitHub reads and publication use `gh` credentials, Git prepares the selected comparison, and the pinned reviewer analyzes it for the private draft. Follow-up verification of earlier findings is planned in ADR 0002 and is still pending.
 
 Use the [README quickstart](README.md#quickstart) for runtime setup, the [development guide](docs/development.md) for commands and packaging, the [glossary](GLOSSARY.md) for workflow terms, and the [ADRs](docs/adr/) for design decisions.
 
 ## Architecture
 
-- In `src/loop_reviewer/`, keep review and inbox rules in `review/` and `inbox/`. Inbox can use review contracts. Keep dependency direction acyclic and inject I/O, clocks, and ID generation through workflow contracts. Implement GitHub, Git, Pi, SQLite, and process locking in `integrations/`.
+- In `src/loop_reviewer/`, keep review and inbox rules in `review/` and `inbox/`. Inbox can use review contracts. Keep dependency direction acyclic and inject I/O, clocks, and ID generation through workflow contracts. Implement GitHub, hosted Git retrieval, SQLite, and process locking in `integrations/`.
+- Keep pinned-source analysis and its versioned contracts in `reviewer/`, with reviewer-side I/O in `reviewer/integrations/`. The standalone commands and reviewer package must not depend on hosted review, inbox, HTTP, or hosted integrations. `integrations/review_process.py` is the only shared integration helper and depends on neither workflow.
 - Wire shared operations in `composition.py`. Keep `cli/` and `local_http/` focused on input, workflow dispatch, and output so both interfaces apply the same rules. Python import boundaries are checked by Import Linter and Ruff.
 - In `web/src/`, use `app/` for routing and cross-feature coordination, `features/` for screens and their queries, and `components/`, `api/`, and `lib/` for shared code. Dependencies between features go through routes. Dependency Cruiser checks these boundaries.
 - Treat FastAPI routes and models as the source for the browser API contract. Regenerate `web/src/api/schema.d.ts` after HTTP contract changes with `mise exec -- pnpm --dir web api:generate`. Use the shared client in `web/src/api/client.ts` for browser requests and preserve the loopback session, bearer capability, and mutation origin checks.

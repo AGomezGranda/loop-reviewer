@@ -88,8 +88,8 @@ def github(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeDiscovery:
             "Inbox scan must not construct reviewer, lock, or publication session"
         )
 
-    monkeypatch.setattr(composition, "PiReviewer", unexpected)
-    monkeypatch.setattr(composition, "LockedPiExecution", unexpected)
+    monkeypatch.setattr(composition, "HostedReportReviewer", unexpected)
+    monkeypatch.setattr(composition, "LockedReviewExecution", unexpected)
     monkeypatch.setattr(composition, "open_gh_publication", unexpected)
     return github
 
@@ -373,7 +373,7 @@ def test_inbox_open_revalidates_before_history_or_reviewer(
         "loop_reviewer.integrations.github_credentials.capture_review_process",
         capture,
     )
-    monkeypatch.setattr(composition, "LockedPiExecution", UnusedExecution)
+    monkeypatch.setattr(composition, "LockedReviewExecution", UnusedExecution)
     if scenario == "resume":
 
         class FakeReviewer:
@@ -388,12 +388,12 @@ def test_inbox_open_revalidates_before_history_or_reviewer(
             def acquire(self, key: ReviewKey) -> Generator[FakeReviewer]:
                 yield FakeReviewer()
 
-        monkeypatch.setattr(composition, "LockedPiExecution", InitialExecution)
+        monkeypatch.setattr(composition, "LockedReviewExecution", InitialExecution)
         assert _run(monkeypatch, "review", pr.ref.url) == 0
         assert "Private draft generated" in capsys.readouterr().out
         saved = store.latest(selection.key)
         assert saved is not None
-        monkeypatch.setattr(composition, "LockedPiExecution", UnusedExecution)
+        monkeypatch.setattr(composition, "LockedReviewExecution", UnusedExecution)
         assert _run(monkeypatch, "inbox", "later", pr.ref.url) == 0
         assert _run(monkeypatch, "inbox", "open", pr.ref.url) == 0
         row_output = capsys.readouterr().out

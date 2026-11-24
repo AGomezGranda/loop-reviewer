@@ -1,6 +1,5 @@
 """Exercise private review generation, resume, retry, and history."""
 
-import subprocess
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -9,9 +8,8 @@ from typing import Literal, override
 
 import pytest
 
-from loop_reviewer.integrations import pi_reviewer
+from loop_reviewer.cli.output import render_draft
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
-from loop_reviewer.integrations.pi_reviewer import PiReviewer
 from loop_reviewer.review.generate import (
     DraftReview,
     FailedReview,
@@ -21,6 +19,7 @@ from loop_reviewer.review.generate import (
     SavedDraftHistoryUnavailable,
     SavedDraftInterrupted,
 )
+from loop_reviewer.review.hosted_report import project_report
 from loop_reviewer.review.model import (
     CompletedReview,
     Finding,
@@ -39,6 +38,9 @@ from loop_reviewer.review.pull_request import (
 )
 from loop_reviewer.review.selection import GitHubReadError
 from loop_reviewer.review.store import ReviewStoreError
+from tests.support.discussion import known_snapshot
+from tests.support.hosted_report import offline_report
+from tests.test_local_checks import PINS
 
 _REF = PullRequestRef("github.com", "acme", "repo", 7)
 _REVISION = ReviewedRevision("main", "a" * 40, "b" * 40, "c" * 40)
@@ -138,10 +140,12 @@ class StubReviewer:
         on_review: Callable[[], None] | None = None,
         error: Exception | None = None,
         interrupt: bool = False,
+        generated: GeneratedReview | None = None,
     ) -> None:
         self.on_review = on_review
         self.error = error
         self.interrupt = interrupt
+        self.generated = generated or GeneratedReview(_DRAFT, "provider/model", 0.0234)
         self.calls = 0
 
     def review(self, selection: ReviewSelection) -> GeneratedReview:
@@ -152,7 +156,7 @@ class StubReviewer:
             raise self.error
         if self.on_review is not None:
             self.on_review()
-        return GeneratedReview(_DRAFT, "provider/model", 0.0234)
+        return self.generated
 
 
 def _app(
@@ -336,6 +340,68 @@ def test_review_abandons_unlocked_running_attempt(retry: bool) -> None:
         assert current.id == run.id
 
 
+def test_partial_report_reopens_without_reviewer(tmp_path: Path) -> None:
+    state = tmp_path / "reviews.sqlite3"
+    selection = _offline_selection()
+    report = offline_report("README")
+    reviewer = StubReviewer(
+        generated=GeneratedReview(project_report(report), None, None, report)
+    )
+    execution = StubExecution(reviewer)
+    reader = StubReader(selection)
+    generated = ReviewPullRequest(reader, SqliteReviewRunStore(state), execution).run(
+        selection.ref
+    )
+    assert isinstance(generated, DraftReview) and generated.status == "generated"
+    assert generated.run.report == report
+    rendered = render_draft(generated.run)
+    assert "Original recommendation: none" in rendered
+    assert "No verified findings in the reviewed scope" in rendered
+
+    resumed = ReviewPullRequest(reader, SqliteReviewRunStore(state), execution).run(
+        selection.ref
+    )
+    assert isinstance(resumed, DraftReview) and resumed.status == "resumed"
+    assert resumed.run == generated.run
+    assert execution.calls == reviewer.calls == 1
+
+
+@pytest.mark.parametrize(
+    "case", ["failed-report", "other-pins", "other-discussion-target"]
+)
+def test_invalid_report_result_never_becomes_publishable(
+    tmp_path: Path, case: str
+) -> None:
+    selection = _offline_selection()
+    if case == "failed-report":
+        report = offline_report("README", "README")
+        assert report.root.status == "failed"
+        draft = ReviewDraft("none", "", (), summary_origin="generated")
+    elif case == "other-pins":
+        report = offline_report("README")
+        selection = _ORIGINAL
+        draft = project_report(report)
+    else:
+        report = offline_report("README", discussion=known_snapshot())
+        assert report.root.discussion is not None
+        draft = project_report(report)
+    store = SqliteReviewRunStore(tmp_path / "reviews.sqlite3")
+    reviewer = StubReviewer(generated=GeneratedReview(draft, None, None, report))
+    app = ReviewPullRequest(StubReader(selection), store, StubExecution(reviewer))
+    outcome = app.run(selection.ref)
+    assert isinstance(outcome, FailedReview) and outcome.kind == "failed"
+    run = store.latest(selection.key)
+    assert run is not None and run.status == "failed" and run.report is None
+    assert store.get_draft(run.id) is None
+
+
+def _offline_selection() -> ReviewSelection:
+    return replace(
+        _ORIGINAL,
+        revision=ReviewedRevision("main", PINS.merge_base, PINS.merge_base, PINS.head),
+    )
+
+
 def test_review_reports_in_progress_on_contention() -> None:
     reader = StubReader(_ORIGINAL)
     store = MemoryStore()
@@ -460,35 +526,6 @@ def test_review_reports_saved_run_when_history_check_fails(
     assert saved is not None
     assert saved.draft == _DRAFT
     assert saved.selection == _ORIGINAL != reader.current
-
-
-def test_malformed_pi_output_is_persisted_as_failed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    def which(name: str, *, path: str | None = None) -> str:
-        return "/fake/pi"
-
-    def capture(
-        args: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[bytes]:
-        return subprocess.CompletedProcess(
-            args, 0, b'{"verdict": [], "summary": "x", "findings": []}'
-        )
-
-    def read_patch(selection: ReviewSelection) -> str:
-        return ""
-
-    monkeypatch.setattr(pi_reviewer.shutil, "which", which)
-    monkeypatch.setattr(pi_reviewer, "capture_review_process", capture)
-    reviewer = PiReviewer(read_patch, "provider/model", {})
-    path = tmp_path / "reviews.sqlite3"
-    app = ReviewPullRequest(
-        StubReader(_ORIGINAL), SqliteReviewRunStore(path), StubExecution(reviewer)
-    )
-    assert app.run(_REF).status == "failed"
-    stored = SqliteReviewRunStore(path).latest(_ORIGINAL.key)
-    assert stored is not None and stored.status == "failed"
-    assert stored.failure == "Pi returned an invalid review. Try again."
 
 
 def test_review_records_reviewer_failure(tmp_path: Path) -> None:

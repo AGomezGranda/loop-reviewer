@@ -6,17 +6,22 @@ root_packages =
 name = Dependencies point inward toward inbox and review workflows
 type = layers
 layers =
-    loop_reviewer.cli
+    loop_reviewer.cli | loop_reviewer.inventory_cli | loop_reviewer.local_checks_cli | loop_reviewer.semantic_review_cli
     loop_reviewer.composition
     loop_reviewer.integrations | loop_reviewer.local_http
     loop_reviewer.inbox
     loop_reviewer.review
+    loop_reviewer.reviewer
+ignore_imports =
+    loop_reviewer.reviewer.integrations.* -> loop_reviewer.integrations.review_process
 
 [importlinter:contract:2]
 name = Package imports are acyclic, including within subpackages
 type = acyclic_siblings
 ancestors =
     loop_reviewer
+ignore_imports =
+    loop_reviewer.reviewer.integrations.* -> loop_reviewer.integrations.review_process
 
 [importlinter:contract:3]
 name = CLI output is independent of integrations
@@ -52,3 +57,34 @@ forbidden_modules =
     loop_reviewer.inbox.discovery
     loop_reviewer.inbox.polling
     loop_reviewer.inbox.store
+
+[importlinter:contract:6]
+name = Standalone commands are independent of hosted review and inbox
+type = forbidden
+source_modules =
+    loop_reviewer.inventory_cli
+    loop_reviewer.local_checks_cli
+    loop_reviewer.semantic_review_cli
+    loop_reviewer.reviewer
+forbidden_modules =
+    loop_reviewer.cli
+    loop_reviewer.composition
+    loop_reviewer.inbox
+    loop_reviewer.local_http
+    loop_reviewer.integrations
+    loop_reviewer.review
+ignore_imports =
+    loop_reviewer.reviewer.integrations.* -> loop_reviewer.integrations.review_process
+
+[importlinter:contract:7]
+name = The shared process helper has no workflow or adapter dependencies
+type = forbidden
+source_modules =
+    loop_reviewer.integrations.review_process
+forbidden_modules =
+    loop_reviewer.cli
+    loop_reviewer.composition
+    loop_reviewer.inbox
+    loop_reviewer.local_http
+    loop_reviewer.review
+    loop_reviewer.reviewer

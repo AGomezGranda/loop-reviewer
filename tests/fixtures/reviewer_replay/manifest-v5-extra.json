@@ -1,0 +1,46 @@
+[
+  {
+    "id": "mixed-clean",
+    "split": "development",
+    "merge_base": "fe10eb0a50ccdb2f92d8283b28f46f5dbfede017",
+    "head": "06d8fe57f212f779e13a5bd710a7bdf86eb82c1c",
+    "expected_coverage_count": 1,
+    "expected_changed_lines": 5,
+    "input_sha256": "3902972fe4fc7ec3aa5a7fb4bc3ae2dd8f77f208b9d3e0da818a13df9bf59bfe",
+    "diff_retrieval_bytes": 102,
+    "legacy_status": "eligible"
+  },
+  {
+    "id": "single-file-total",
+    "split": "development",
+    "merge_base": "ca2c43866f2685f1b90c38720ca73361ae7c5ed6",
+    "head": "f002e4b9f761a4746c8df35d212c20fe48b4ef7b",
+    "expected_coverage_count": 1,
+    "expected_changed_lines": 2,
+    "input_sha256": "ccf2bbbe31c360b360e6bcca20e29f0c7e65088cab1be7f4a23acefca50e7e9b",
+    "diff_retrieval_bytes": 133,
+    "legacy_status": "eligible"
+  },
+  {
+    "id": "deleted-currency",
+    "split": "holdout",
+    "merge_base": "bf16202a4f123d225b0e7205c97617341700e580",
+    "head": "26ac518f6ad5d9f1bad2e47fbf29b06d39f2b1a6",
+    "expected_coverage_count": 1,
+    "expected_changed_lines": 1,
+    "input_sha256": "0dd1ba5ee04798de13458f0ae70ae4d93b3a0c85b144c1c983c4533767d1cddc",
+    "diff_retrieval_bytes": 54,
+    "legacy_status": "eligible"
+  },
+  {
+    "id": "cross-file-settings",
+    "split": "holdout",
+    "merge_base": "f19c7d52ab5f8407f715985e7945ec2a036c4627",
+    "head": "14207bd13f3fa2235c07809086f5b867c2bee567",
+    "expected_coverage_count": 1,
+    "expected_changed_lines": 2,
+    "input_sha256": "dc7403764703f641b0c5e3cc9fd3818d4d4ad23ebe3c5d56d08e688f7d413967",
+    "diff_retrieval_bytes": 61,
+    "legacy_status": "eligible"
+  }
+]

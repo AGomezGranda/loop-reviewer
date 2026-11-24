@@ -45,4 +45,4 @@ Use **Scan now** in the browser or `loop-reviewer scan` in the CLI to refresh on
 
 Open the browser workspace or run `loop-reviewer watch` for scheduled scans. Browser tabs and terminal watchers share a two-minute schedule. The first watcher makes discovery due immediately, slow scans skip missed ticks, and scheduled checks stop when the last watcher leaves. The CLI watcher shows repository failures without stopping, nudges only for new or changed active non-stale rows, and shows a deferred count. A superseded scan retries at the next tick. `watch` exits `1` for missing setup or a local state error, and `130` on Ctrl-C.
 
-Setup, scan, and watch don’t require Pi and never generate or publish a review.
+Setup, scan, and watch do not run the reviewer or publish feedback.

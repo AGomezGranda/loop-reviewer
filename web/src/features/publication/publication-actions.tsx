@@ -15,6 +15,7 @@ export function PreviewControl({
 	runId,
 	version,
 	disabled,
+	warnPartial = false,
 	onPreview,
 	recoveryLink,
 	onConflict,
@@ -22,6 +23,7 @@ export function PreviewControl({
 	runId: string;
 	version: string;
 	disabled: boolean;
+	warnPartial?: boolean;
 	onPreview: (preview: Preview) => void;
 	recoveryLink: (id: string) => React.ReactNode;
 	onConflict: () => void;
@@ -65,6 +67,12 @@ export function PreviewControl({
 			}}
 		>
 			<h2 className="font-medium">Publish to GitHub</h2>
+			{warnPartial && (
+				<p role="note" className="text-sm text-muted-foreground">
+					Coverage is partial. Before approving, check the gaps in the private
+					report. Approval is your decision.
+				</p>
+			)}
 			<fieldset
 				disabled={disabled || preview.isPending}
 				className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end"

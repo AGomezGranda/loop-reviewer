@@ -2,6 +2,8 @@
 
 import pytest
 
+from loop_reviewer.review.generate import ReviewerError
+from loop_reviewer.review.hosted_report import project_report
 from loop_reviewer.review.model import (
     DraftValidationError,
     Finding,
@@ -15,6 +17,7 @@ from loop_reviewer.review.pull_request import (
     ReviewComparison,
     ReviewedRevision,
 )
+from tests.support.hosted_report import offline_report
 
 _REF = PullRequestRef("github.com", "Acme", "Repo", 7)
 _BASE_TIP, _MERGE_BASE, _HEAD = (digit * 40 for digit in "abc")
@@ -74,7 +77,7 @@ def test_draft_edits_preserve_recommendation_and_location() -> None:
         1, condition="new", consequence=None
     )
     assert edited == ReviewDraft(
-        "comment", summary, (Finding("high", "new", "impact", location),)
+        "comment", summary, (Finding("high", "new", "impact", location),), "edited"
     )
     assert original.summary == "original"
     assert edited.edit_finding(
@@ -95,6 +98,29 @@ def test_draft_mutations_use_preview_order() -> None:
             draft.drop_finding(number)
     with pytest.raises(DraftValidationError, match="at least one"):
         draft.edit_finding(1, condition=None, consequence=None)
+
+
+@pytest.mark.parametrize(
+    ("path", "location"),
+    [
+        pytest.param("space%20%C3%A9.py", FindingLocation("space é.py", 2), id="utf8"),
+        pytest.param("not-%FF.py", None, id="non-utf8"),
+        pytest.param("line%0Abreak.py", None, id="control-in-path"),
+    ],
+)
+def test_report_projection_only_offers_renderable_locations(
+    path: str, location: FindingLocation | None
+) -> None:
+    report = offline_report(path)
+    (finding,) = project_report(report).findings
+    assert finding.location == location
+    assert finding.report_id == report.root.findings[0].id
+
+
+def test_failed_report_cannot_be_projected() -> None:
+    report = offline_report("README", "README")
+    with pytest.raises(ReviewerError, match="pinned comparison"):
+        project_report(report)
 
 
 @pytest.mark.parametrize(

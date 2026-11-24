@@ -6,10 +6,8 @@ from typing import Literal, Self
 from unicodedata import category
 from urllib.parse import urlsplit
 
-_DNS_LABEL = r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
-_HOST = re.compile(rf"{_DNS_LABEL}(?:\.{_DNS_LABEL})*")
-_OWNER = r"[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*"
-_REPOSITORY = re.compile(rf"({_OWNER})/([a-zA-Z0-9_.-]{{1,100}})")
+from loop_reviewer.source_names import validate_repository, validate_target_branch
+
 _PR_PATH = re.compile(r"/([^/]+/[^/]+)/pull/([0-9]+)/?")
 _SHA = re.compile(r"[0-9a-fA-F]{40}")
 _EXPECTED_URL = "Expected a pull request URL: https://HOST/OWNER/REPO/pull/NUMBER"
@@ -28,13 +26,7 @@ class PullRequestRef:
     repository_id: int | None = None
 
     def __post_init__(self) -> None:
-        if len(self.host) > 253 or not _HOST.fullmatch(self.host):
-            raise ValueError("Expected a valid GitHub hostname")
-        if not _REPOSITORY.fullmatch(f"{self.owner}/{self.repo}") or self.repo in {
-            ".",
-            "..",
-        }:
-            raise ValueError("Expected a GitHub repository in OWNER/REPO form")
+        validate_repository(self.host, self.owner, self.repo)
         if type(self.number) is not int or self.number < 1:
             raise ValueError("Expected a positive pull request number")
         if self.repository_id is not None and (
@@ -74,21 +66,6 @@ def commit_id(value: str) -> str:
     return value.lower()
 
 
-def _validate_target_branch(branch: str) -> None:
-    if (
-        any(char.isspace() or category(char) in {"Cc", "Cs"} for char in branch)
-        or any(char in branch for char in "~^:?*[\\")
-        or ".." in branch
-        or "@{" in branch
-        or branch.endswith(".")
-        or any(
-            not part or part.startswith(".") or part.endswith(".lock")
-            for part in branch.split("/")
-        )
-    ):
-        raise ValueError("Expected a valid Git target branch")
-
-
 @dataclass(frozen=True)
 class PullRequest:
     ref: PullRequestRef
@@ -99,7 +76,7 @@ class PullRequest:
     head: str
 
     def __post_init__(self) -> None:
-        _validate_target_branch(self.target_branch)
+        validate_target_branch(self.target_branch)
         object.__setattr__(self, "head", commit_id(self.head))
 
     def require_open_for_review(self) -> None:
@@ -118,7 +95,7 @@ class ReviewComparison:
     head: str
 
     def __post_init__(self) -> None:
-        _validate_target_branch(self.target_branch)
+        validate_target_branch(self.target_branch)
         object.__setattr__(self, "merge_base", commit_id(self.merge_base))
         object.__setattr__(self, "head", commit_id(self.head))
 
@@ -131,7 +108,7 @@ class ReviewedRevision:
     head: str
 
     def __post_init__(self) -> None:
-        _validate_target_branch(self.target_branch)
+        validate_target_branch(self.target_branch)
         object.__setattr__(self, "base_tip", commit_id(self.base_tip))
         object.__setattr__(self, "merge_base", commit_id(self.merge_base))
         object.__setattr__(self, "head", commit_id(self.head))

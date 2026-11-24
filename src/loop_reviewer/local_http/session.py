@@ -1,9 +1,13 @@
 """Protect the private local origin and bound requests before JSON parsing."""
 
+from collections.abc import Callable, Coroutine
 from hmac import compare_digest
+from typing import Any, override
 
+from fastapi import Request
+from fastapi.routing import APIRoute
 from starlette.datastructures import Headers, MutableHeaders
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from loop_reviewer.local_http.models import ApiError
@@ -18,6 +22,36 @@ def error_response(error: ApiError) -> JSONResponse:
         error.body.model_dump(by_alias=True, exclude_none=True),
         status_code=error.status,
     )
+
+
+async def require_empty_body(request: Request) -> None:
+    if await request.body():
+        raise ApiError(
+            422, "invalid_input", "This action does not accept a request body."
+        )
+
+
+class JsonBodyRoute(APIRoute):
+    @override
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+        if self.body_field is None:
+            return handler
+
+        async def require_json(request: Request) -> Response:
+            content_type = (
+                request.headers.get("content-type", "")
+                .partition(";")[0]
+                .strip()
+                .lower()
+            )
+            if content_type != "application/json" and await request.body():
+                raise ApiError(
+                    415, "unsupported_media_type", "Send a JSON request body."
+                )
+            return await handler(request)
+
+        return require_json
 
 
 class LocalSession:
@@ -67,7 +101,7 @@ class LocalSession:
                             "invalid_origin",
                             "The request must come from the local workspace.",
                         )
-                    receive = await self._mutation_body(path, headers, receive)
+                    receive = await self._mutation_body(receive)
             await self._app(scope, receive, send_private)
         except ApiError as error:
             if not started:
@@ -81,9 +115,7 @@ class LocalSession:
                 )
                 await error_response(error)(scope, receive, send_private)
 
-    async def _mutation_body(
-        self, path: str, headers: Headers, receive: Receive
-    ) -> Receive:
+    async def _mutation_body(self, receive: Receive) -> Receive:
         body = bytearray()
         while True:
             message = await receive()
@@ -98,18 +130,6 @@ class LocalSession:
                 raise ApiError(413, "body_too_large", "The request is too large.")
             if not message.get("more_body", False):
                 break
-        if body:
-            if path.endswith(("/confirm", "/recover", "/scan")):
-                raise ApiError(
-                    422, "invalid_input", "This action does not accept a request body."
-                )
-            content_type = (
-                headers.get("content-type", "").partition(";")[0].strip().lower()
-            )
-            if content_type != "application/json":
-                raise ApiError(
-                    415, "unsupported_media_type", "Send a JSON request body."
-                )
 
         async def replay() -> Message:
             nonlocal pending

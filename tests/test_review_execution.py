@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from loop_reviewer.integrations.local_state.review_lock import LockedPiExecution
+from loop_reviewer.integrations.local_state.review_lock import LockedReviewExecution
 from loop_reviewer.review.generate import ReviewerError
 from loop_reviewer.review.model import GeneratedReview, ReviewDraft, ReviewSelection
 from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 from loop_reviewer.integrations.git_comparison import GitComparison
-from loop_reviewer.integrations.local_state.review_lock import LockedPiExecution
+from loop_reviewer.integrations.local_state.review_lock import LockedReviewExecution
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
 from loop_reviewer.review.generate import ReviewPullRequest
 from loop_reviewer.review.pull_request import (
@@ -62,7 +62,8 @@ class FakeReviewer:
         if mode == "block-git":
             root = str(Path(__file__).parent)
             environment = dict(os.environ, PATH=root)
-            GitComparison(environment, inherited_fd=self.descriptor).read(selection)
+            with GitComparison(environment, inherited_fd=self.descriptor).open_verified_repository(selection):
+                pass
         elif mode == "block-reviewer":
             subprocess.Popen(
                 [sys.executable, str(Path(__file__).with_name("child.py")),
@@ -77,7 +78,7 @@ class FakeReviewer:
 application = ReviewPullRequest(
     Reader(),
     SqliteReviewRunStore(Path(db)),
-    LockedPiExecution(Path(locks), FakeReviewer),
+    LockedReviewExecution(Path(locks), FakeReviewer),
 )
 print(application.run(ref, retry=retry == "retry").status)
 """
@@ -316,7 +317,7 @@ def test_lock_close_error_preserves_review_result(
         "teammate",
         ReviewedRevision("main", "a" * 40, "b" * 40, "c" * 40),
     )
-    execution = LockedPiExecution(tmp_path / "locks", lambda _: StubReviewer())
+    execution = LockedReviewExecution(tmp_path / "locks", lambda _: StubReviewer())
     close = os.close
 
     def interrupted_close(descriptor: int) -> None:

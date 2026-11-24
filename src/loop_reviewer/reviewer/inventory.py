@@ -4,7 +4,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from typing import Literal, Protocol
 
-from loop_reviewer.review.inventory_contract import (
+from loop_reviewer.reviewer.inventory_contract import (
     MAX_CHANGES,
     ChangedFile,
     CompleteInventory,
@@ -26,10 +26,6 @@ BlobReadFailure = Literal["not_found", "limit_reached", "unavailable"]
 class InventorySource(Protocol):
     def inventory(self) -> tuple[ChangedFile, ...]: ...
 
-    def read_blob(
-        self, side: RevisionSide, path: str, *, max_bytes: int
-    ) -> bytes | BlobReadFailure: ...
-
 
 class InventorySourceError(Exception):
     def __init__(self, code: InventoryErrorCode, message: str) -> None:
@@ -37,22 +33,24 @@ class InventorySourceError(Exception):
         self.error = InventoryError(code=code, message=message)
 
 
-def _sort_key(row: FileCoverage) -> tuple[bytes, bytes]:
+def _sort_key(row: ChangedFile) -> tuple[bytes, bytes]:
     path = row.new or row.old
     assert path is not None
     return decode_path(path.path), decode_path(row.old.path) if row.old else b""
 
 
-def _coverage(
-    rows: tuple[ChangedFile, ...], hash_width: int
-) -> tuple[FileCoverage, ...]:
+def validated_inventory(
+    source: InventorySource, comparison: PinnedComparison
+) -> tuple[ChangedFile, ...]:
+    rows = source.inventory()
+    hash_width = len(comparison.head)
     if len(rows) > MAX_CHANGES:
         raise InventorySourceError(
             "work_limit", "The comparison exceeds 10,000 changes."
         )
     old_paths: set[str] = set()
     new_paths: set[str] = set()
-    coverage: list[FileCoverage] = []
+    validated: list[ChangedFile] = []
     for candidate in rows:
         try:
             row = ChangedFile.model_validate(candidate)
@@ -69,21 +67,23 @@ def _coverage(
                     "File metadata has a duplicate path or wrong object ID format.",
                 )
             paths.add(side.path)
-        coverage.append(
-            FileCoverage(
-                change_type=row.change_type,
-                old=row.old,
-                new=row.new,
-                added_lines=row.added_lines,
-                deleted_lines=row.deleted_lines,
-                binary=row.binary,
-                oversized=row.oversized,
-                outcome="complete",
-                highest_completed_check="inventory_only",
-                required_investigation_ids=(),
-            )
-        )
-    return tuple(sorted(coverage, key=_sort_key))
+        validated.append(row)
+    return tuple(sorted(validated, key=_sort_key))
+
+
+def _coverage(row: ChangedFile) -> FileCoverage:
+    return FileCoverage(
+        change_type=row.change_type,
+        old=row.old,
+        new=row.new,
+        added_lines=row.added_lines,
+        deleted_lines=row.deleted_lines,
+        binary=row.binary,
+        oversized=row.oversized,
+        outcome="complete",
+        highest_completed_check="inventory_only",
+        required_investigation_ids=(),
+    )
 
 
 def review_inventory(
@@ -113,7 +113,9 @@ def review_inventory(
     }
     try:
         with open_source(comparison) as source:
-            coverage = _coverage(source.inventory(), len(comparison.head))
+            coverage = tuple(
+                _coverage(row) for row in validated_inventory(source, comparison)
+            )
     except InventorySourceError as error:
         return ReviewerResult(
             FailedInventory.model_validate(

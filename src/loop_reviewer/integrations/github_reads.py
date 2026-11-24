@@ -8,7 +8,12 @@ from loop_reviewer.review.selection import GitHubReadError
 
 INVALID_RESPONSE = "GitHub returned an invalid or unexpected response."
 type ReadFailureKind = Literal[
-    "access", "rate_limit", "transport", "invalid_response", "missing_cli"
+    "access",
+    "rate_limit",
+    "transport",
+    "invalid_response",
+    "missing_cli",
+    "limit_reached",
 ]
 
 
@@ -35,7 +40,7 @@ def read_json(
                 "Could not run the GitHub CLI (gh). Check your installation.",
             ),
             "encoding": ("invalid_response", INVALID_RESPONSE),
-            "output": ("invalid_response", INVALID_RESPONSE),
+            "output": ("limit_reached", INVALID_RESPONSE),
         }
         raise GhReadFailure(*failures[error.reason]) from None
 

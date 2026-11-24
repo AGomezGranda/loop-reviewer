@@ -1,12 +1,6 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import {
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -14,7 +8,6 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
-const launcher = join(repository, "tests/support/browser_review.py");
 const pr = "https://github.com/fixture/repo/pull/17";
 
 function args(...command: string[]) {
@@ -24,7 +17,8 @@ function args(...command: string[]) {
 		repository,
 		"--locked",
 		"python",
-		launcher,
+		"-m",
+		"tests.support.browser_review",
 		...command,
 	];
 }
@@ -42,22 +36,31 @@ async function launchAddress(server: ChildProcess) {
 	}
 }
 
-test("CLI draft edits are shared with the browser and the exact CLI publication preview", async ({
+test("pinned CLI reports stay private through browser edits and exact publication", async ({
 	page,
 }) => {
 	const cwd = mkdtempSync(join(tmpdir(), "loop-reviewer-smoke-"));
 	const state = join(cwd, "state");
 	mkdirSync(state, { recursive: true });
-	const env = { ...process.env, XDG_STATE_HOME: state, XDG_CONFIG_HOME: cwd };
+	const env = {
+		...process.env,
+		PYTHONPATH: repository,
+		XDG_STATE_HOME: state,
+		XDG_CONFIG_HOME: cwd,
+	};
 	const cli = (...command: string[]) =>
 		execFileSync("uv", args(...command), { cwd, env, encoding: "utf8" });
 	const initial = cli("review", pr);
-	const estimate = "Estimated generation cost · $0.0234";
+	const estimate = "Estimated generation cost · < $0.0001";
+	const privateLead = "PRIVATE-LEAD-CANARY";
+	const head = initial.match(/^Head: ([a-f\d]+)$/m)?.[1];
 	expect(initial).toContain(estimate);
-	expect(initial).toContain("Generation model: provider/model");
+	expect(initial).toContain("Generation model: fixture/model");
+	expect(initial).toMatch(
+		/example\.py: unfinished.*\n.*settings\.txt: unfinished/,
+	);
 	const runId = initial.match(/^Run ID: (\d+)$/m)?.[1];
-	expect(runId).toBeTruthy();
-	if (!runId) throw new Error("CLI did not report a run ID");
+	if (!runId || !head) throw new Error("CLI did not report a run ID and head");
 	const server = spawn("uv", args("ui"), {
 		cwd,
 		env,
@@ -71,17 +74,8 @@ test("CLI draft edits are shared with the browser and the exact CLI publication 
 		).toBeVisible();
 		expect(new URL(page.url()).hash).toBe("");
 		await page.getByRole("link", { name: "Setup", exact: true }).click();
-		const model = page.getByLabel("Pi reviewer model");
-		await model.fill("provider/browser-model");
-		await page.getByRole("button", { name: "Save settings" }).click();
-		await expect(
-			page.getByText("Settings saved.", { exact: true }),
-		).toBeVisible();
-		const config = join(cwd, "loop-reviewer", "config.toml");
-		const saved = readFileSync(config, "utf8");
-		expect(saved).toContain('model = "provider/browser-model"');
-		writeFileSync(config, saved.replace("browser-model", "file-model"));
-		await expect(model).toHaveValue("provider/file-model", { timeout: 10_000 });
+		await expect(page.getByLabel("Jira project key")).toBeVisible();
+		await expect(page.getByLabel("Pi reviewer model")).toHaveCount(0);
 		await page.getByRole("link", { name: "Inbox", exact: true }).click();
 		await page.setViewportSize({ width: 390, height: 844 });
 		await page.getByLabel("Pull request URL").fill(pr);
@@ -89,43 +83,46 @@ test("CLI draft edits are shared with the browser and the exact CLI publication 
 			.getByRole("button", { name: "Open review", exact: true })
 			.click();
 		await expect(page).toHaveURL(new RegExp(`/drafts/${runId}$`));
-		await expect(page.getByText("Original CLI feedback")).toBeVisible();
+		const report = page.getByRole("region", {
+			name: "Original reviewer report",
+		});
+		await expect(report.getByText(/Partial review/)).toBeVisible();
+		await report.getByText(/Private leads, evidence/).click();
+		await expect(report.getByText(new RegExp(privateLead))).toBeVisible();
+		await report.getByText(/Private leads, evidence/).click();
 		await expect(page.getByText(estimate)).toBeVisible();
-		await expect(
-			page.getByText("provider/model", { exact: true }),
-		).toBeVisible();
 
 		await page.getByRole("button", { name: "Edit summary" }).click();
 		const edited =
 			"Browser-edited feedback\n\nThe second paragraph is preserved.";
-		await page
-			.getByRole("textbox", { name: "Summary", exact: true })
-			.fill(edited);
+		const summary = page.getByRole("textbox", { name: "Summary", exact: true });
+		await summary.fill(edited);
 		const history = page.getByRole("link", { name: "History", exact: true });
 		await history.focus();
 		await page.keyboard.press("Enter");
-		const leaveDialog = page.getByRole("alertdialog");
 		await expect(
-			leaveDialog.getByRole("button", { name: "Keep editing" }),
+			page
+				.getByRole("alertdialog")
+				.getByRole("button", { name: "Keep editing" }),
 		).toBeFocused();
 		await page.keyboard.press("Escape");
 		await expect(history).toBeFocused();
-		await expect(
-			page.getByRole("textbox", { name: "Summary", exact: true }),
-		).toHaveValue(edited);
+		await expect(summary).toHaveValue(edited);
 		expect(
 			await page.evaluate(() => document.documentElement.scrollWidth),
 		).toBe(390);
 		await page.getByRole("button", { name: "Save changes" }).click();
-		await expect(
-			page.getByRole("status").filter({ hasText: "Draft saved at version 2." }),
-		).toBeVisible();
-		await expect(page.getByText(estimate)).toBeVisible();
+		await expect(page.getByText("Draft saved at version 2.")).toBeVisible();
 
-		await page.getByLabel("GitHub action").selectOption("comment");
-		await page.getByRole("button", { name: "Prepare preview" }).click();
+		const action = page.getByLabel("GitHub action");
+		const prepare = page.getByRole("button", { name: "Prepare preview" });
+		const fresh = page.getByRole("link", { name: "Make a fresh preview" });
 		const body = page.getByLabel("Exact review body");
+		const inline = page.getByLabel("Inline body for example.py:1");
+		await action.selectOption("comment");
+		await prepare.click();
 		await expect(body).toContainText("Browser-edited feedback");
+		await expect(body).not.toContainText(privateLead);
 		const cliPreview = cli(
 			"publish",
 			"preview",
@@ -138,43 +135,53 @@ test("CLI draft edits are shared with the browser and the exact CLI publication 
 		const cliBody = cliPreview.match(
 			/----- BEGIN REVIEW BODY -----\n([\s\S]*?)\n----- END REVIEW BODY -----/,
 		)?.[1];
-		expect(cliPreview).not.toContain(estimate);
 		const normalize = (text: string) =>
 			text.replace(/<!-- loop-reviewer:[a-f\d-]+ -->/, "<!-- marker -->");
+		expect(cliPreview).not.toContain(privateLead);
 		expect(normalize((await body.textContent()) ?? "")).toBe(
 			normalize(cliBody ?? ""),
 		);
-		expect(
-			await page.getByLabel("Inline body for example.py:8").textContent(),
-		).toBe(
+		expect(await inline.textContent()).toBe(
 			cliPreview.match(
 				/----- BEGIN INLINE BODY -----\n([\s\S]*?)\n----- END INLINE BODY -----/,
 			)?.[1],
 		);
-		await page.getByRole("link", { name: "Make a fresh preview" }).click();
-		await page.setViewportSize({ width: 1280, height: 900 });
-		const finish = page.getByRole("button", { name: "Finish locally" });
-		await finish.focus();
-		await page.keyboard.press("Enter");
+		await fresh.click();
+
+		await action.selectOption("comment");
+		await page.getByLabel("Summary only").check();
+		await prepare.click();
+		await expect(body).toContainText("CPython rejects the head file");
+		await expect(body).not.toContainText(privateLead);
+		await expect(inline).toHaveCount(0);
+		await fresh.click();
+
+		await page.getByRole("button", { name: "Remove finding 1" }).click();
+		await expect(page.getByText(/Coverage is partial/)).toBeVisible();
+		await expect(report.getByText("Original findings (1)")).toBeVisible();
+		await expect(action).toHaveValue("");
+		await action.selectOption("approve");
+		await prepare.click();
+		await expect(body).toContainText("Browser-edited feedback");
+		await expect(body).not.toContainText(privateLead);
+		await expect(body).not.toContainText("CPython rejects");
+		const approvedBody = await body.textContent();
+		await page
+			.getByRole("button", { name: "Confirm approval as @reviewer" })
+			.click();
 		await expect(
-			page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }),
-		).toBeFocused();
-		await page.keyboard.press("Escape");
-		await expect(finish).toBeFocused();
-		await finish.click();
-		await page.getByRole("button", { name: "Confirm local finish" }).click();
-		await expect(page).toHaveURL(new RegExp(`/history/${runId}$`));
-		await expect(page.getByText("Finished locally · Private")).toBeVisible();
-		await page.reload();
-		await expect(page.getByText("Finished locally · Private")).toBeVisible();
-		await expect(page.getByText(edited)).toBeVisible();
-		await expect(page.getByText(estimate)).toBeVisible();
-		await expect(
-			page.getByText("provider/model", { exact: true }),
+			page.getByRole("status").filter({ hasText: "Published to GitHub" }),
 		).toBeVisible();
+		const sent = readFileSync(join(state, "sent.jsonl"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(sent).toEqual([
+			{ body: approvedBody, action: "approve", head, comments: 0 },
+		]);
 		const completed = cli("review", pr);
-		expect(completed).toContain(estimate);
-		expect(completed).toContain("Generation model: provider/model");
+		expect(completed).toContain("Published — Approval submitted");
+		expect(completed).toContain("Original verified findings");
 		expect(readFileSync(join(state, "events"), "utf8")).toBe("review\n");
 	} finally {
 		await page.close();

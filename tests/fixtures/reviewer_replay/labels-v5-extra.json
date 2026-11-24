@@ -1,0 +1,46 @@
+{
+  "mixed-clean": [],
+  "single-file-total": [
+    {
+      "id": "wrong-cart-total",
+      "path": "cart.ts",
+      "cause": "The total adds price and quantity instead of multiplying them.",
+      "trigger": "Call total(10, 3).",
+      "consequence": "The function returns 13 instead of 30.",
+      "impact": "The cart reports an incorrect subtotal.",
+      "ranges": [
+        {"side":"base","path":"cart.ts","start_line":2,"end_line":2,"text":"  return price * quantity;"},
+        {"side":"head","path":"cart.ts","start_line":2,"end_line":2,"text":"  return price + quantity;"}
+      ]
+    }
+  ],
+  "deleted-currency": [
+    {
+      "id": "broken-currency-import",
+      "path": "defaultCurrency.js",
+      "cause": "defaultCurrency.js is deleted while invoice.js still imports it.",
+      "trigger": "Load invoice.js as an ES module.",
+      "consequence": "Module resolution fails before formatInvoice can run.",
+      "impact": "Invoice formatters cannot load the module.",
+      "ranges": [
+        {"side":"base","path":"defaultCurrency.js","start_line":1,"end_line":1,"text":"export const defaultCurrency = \"USD \";"},
+        {"side":"head","path":"invoice.js","start_line":1,"end_line":1,"text":"import { defaultCurrency } from \"./defaultCurrency.js\";"}
+      ]
+    }
+  ],
+  "cross-file-settings": [
+    {
+      "id": "null-invoice-prefix",
+      "path": "invoice.json",
+      "cause": "The invoicePrefix setting becomes null, but the consumer assumes a string.",
+      "trigger": "Load print.mjs with the shipped invoice.json in the working directory.",
+      "consequence": "Calling toUpperCase on null aborts module initialization with a TypeError.",
+      "impact": "The print module cannot load with the default invoice configuration.",
+      "ranges": [
+        {"side":"base","path":"invoice.json","start_line":1,"end_line":1,"text":"{\"invoicePrefix\":\"inv\"}"},
+        {"side":"head","path":"invoice.json","start_line":1,"end_line":1,"text":"{\"invoicePrefix\":null}"},
+        {"side":"head","path":"print.mjs","start_line":3,"end_line":3,"text":"export const invoicePrefix = settings.invoicePrefix.toUpperCase();"}
+      ]
+    }
+  ]
+}

@@ -44,6 +44,18 @@ def decode_path(path: str) -> bytes:
     return unquote_to_bytes(path)
 
 
+def canonical_path(path: str) -> bytes:
+    raw = decode_path(path)
+    if (
+        len(raw) > _MAX_PATH_BYTES
+        or b"\0" in raw
+        or any(part in (b"", b".", b"..") for part in raw.split(b"/"))
+        or encode_path(raw) != path
+    ):
+        raise ValueError("Expected a canonical percent-encoded Git path")
+    return raw
+
+
 class _Record(BaseModel):
     model_config = ConfigDict(
         strict=True, frozen=True, extra="forbid", revalidate_instances="always"
@@ -61,8 +73,11 @@ class PinnedComparison(_Record):
         return self
 
 
+MAX_RUNTIME_SPEND = 3_000_000
+
+
 class InventoryBudget(_Record):
-    max_model_spend_usd_micros: Annotated[int, Field(ge=0, le=3_000_000)]
+    max_model_spend_usd_micros: Annotated[int, Field(ge=0, le=MAX_RUNTIME_SPEND)]
 
 
 class ReviewerRequest(_Record):
@@ -82,14 +97,7 @@ class FileSide(_Record):
 
     @model_validator(mode="after")
     def valid_side(self) -> Self:
-        raw = decode_path(self.path)
-        if (
-            len(raw) > _MAX_PATH_BYTES
-            or b"\0" in raw
-            or any(part in (b"", b".", b"..") for part in raw.split(b"/"))
-            or encode_path(raw) != self.path
-        ):
-            raise ValueError("Expected a canonical percent-encoded Git path")
+        canonical_path(self.path)
         if (self.mode == "160000") != (self.blob_bytes is None):
             raise ValueError("Only gitlinks have no blob size")
         return self

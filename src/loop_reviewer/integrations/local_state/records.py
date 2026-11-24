@@ -11,6 +11,7 @@ from loop_reviewer.review.model import (
     Finding,
     FindingLocation,
     PublicationReceipt,
+    Recommendation,
     ReviewDraft,
     ReviewerFailureKind,
     ReviewRun,
@@ -18,17 +19,30 @@ from loop_reviewer.review.model import (
     RunStatus,
     RunTransitionError,
     Severity,
-    Verdict,
+    SummaryOrigin,
+    require_report_association,
 )
 from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
 from loop_reviewer.review.store import ReviewStoreError
+from loop_reviewer.reviewer.full_review_contract import FullReviewResult
 
 _UNREADABLE = "The local review database is unreadable."
 _STATUSES = {"running", "draft_ready", "failed", "abandoned"}
 
 
 def completion_from_row(row: tuple[object, ...]) -> CompletedReview:
-    run_id, version, selection, draft, status, review_id, action, model, cost = row
+    (
+        run_id,
+        version,
+        selection,
+        draft,
+        status,
+        review_id,
+        action,
+        model,
+        cost,
+        *original_report,
+    ) = row
     if type(run_id) is not int or run_id < 1 or type(version) is not int or version < 1:
         raise ReviewStoreError(_UNREADABLE)
     receipt = None
@@ -41,13 +55,23 @@ def completion_from_row(row: tuple[object, ...]) -> CompletedReview:
         receipt = PublicationReceipt(review_id, action)
     elif status != "not_published" or review_id is not None or action is not None:
         raise ReviewStoreError(_UNREADABLE)
+    chosen = selection_from_json(selection)
+    feedback = _draft_from_json(draft)
+    report = None
+    if original_report:
+        report = _report_from_json(original_report[0])
+        try:
+            require_report_association(report, chosen, feedback)
+        except RunTransitionError:
+            raise ReviewStoreError(_UNREADABLE) from None
     return CompletedReview(
         DraftTarget(run_id, version),
-        selection_from_json(selection),
-        _draft_from_json(draft),
+        chosen,
+        feedback,
         receipt,
         _generation_model(model),
         _generation_cost(cost),
+        report,
     )
 
 
@@ -79,11 +103,21 @@ def draft_json(draft: ReviewDraft) -> str:
         {
             "verdict": draft.verdict,
             "summary": draft.summary,
+            **(
+                {"summary_origin": draft.summary_origin}
+                if draft.summary_origin != "legacy"
+                else {}
+            ),
             "findings": [
                 {
                     "severity": finding.severity,
                     "condition": finding.condition,
                     "consequence": finding.consequence,
+                    **(
+                        {"report_id": finding.report_id}
+                        if finding.report_id is not None
+                        else {}
+                    ),
                     "location": None
                     if finding.location is None
                     else {
@@ -109,6 +143,7 @@ def run_from_row(row: tuple[object, ...]) -> ReviewRun:
         failure_kind,
         model,
         cost,
+        report,
     ) = row
     if (
         type(run_id) is not int
@@ -133,8 +168,18 @@ def run_from_row(row: tuple[object, ...]) -> ReviewRun:
             cast("ReviewerFailureKind | None", failure_kind),
             _generation_model(model),
             _generation_cost(cost),
+            _report_from_json(report),
         )
     except RunTransitionError:
+        raise ReviewStoreError(_UNREADABLE) from None
+
+
+def _report_from_json(value: object) -> FullReviewResult | None:
+    if value is None:
+        return None
+    try:
+        return FullReviewResult.model_validate_json(_json_text(value))
+    except TypeError, ValueError, RecursionError:
         raise ReviewStoreError(_UNREADABLE) from None
 
 
@@ -187,9 +232,10 @@ def _draft_from_json(value: object) -> ReviewDraft:
         if not isinstance(findings, list):
             raise TypeError
         return ReviewDraft(
-            cast("Verdict", verdict),
+            cast("Recommendation", verdict),
             _string(data["summary"]),
             tuple(_finding(item) for item in findings),
+            cast("SummaryOrigin", _string(data.get("summary_origin", "legacy"))),
         )
     except KeyError, TypeError, ValueError, RecursionError, DraftValidationError:
         raise ReviewStoreError(_UNREADABLE) from None
@@ -199,11 +245,13 @@ def _finding(value: object) -> Finding:
     data = _object(value)
     severity = _string(data["severity"])
     location = data.get("location")
+    report_id = data.get("report_id")
     return Finding(
         cast("Severity", severity),
         _string(data["condition"]),
         _string(data["consequence"]),
         None if location is None else _location(location),
+        None if report_id is None else _string(report_id),
     )
 
 

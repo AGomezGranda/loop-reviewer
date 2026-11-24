@@ -1,0 +1,49 @@
+{
+  "test-only": [],
+  "internal-refactor": [],
+  "syntax-regression": [
+    {
+      "id": "invalid-break",
+      "path": "producer.py",
+      "cause": "A return is replaced with a break outside any loop.",
+      "trigger": "Compile the head producer.py module.",
+      "consequence": "CPython reports SyntaxError and cannot load the module.",
+      "impact": "The module is unusable, regardless of whether callers reach the changed function.",
+      "ranges": [
+        {"side": "base", "path": "producer.py", "start_line": 2, "end_line": 2, "text": "    return 'missing'"},
+        {"side": "head", "path": "producer.py", "start_line": 2, "end_line": 2, "text": "    break"}
+      ]
+    }
+  ],
+  "unchanged-consumer": [
+    {
+      "id": "empty-result-indexing",
+      "path": "producer.py",
+      "cause": "fetch_items returns an empty list instead of None; the unchanged consumer only guards None.",
+      "trigger": "Call first_item() when fetch_items has no items.",
+      "consequence": "first_item indexes the empty list and raises IndexError instead of returning 'missing'.",
+      "impact": "The consumer loses its normal empty-state behavior.",
+      "ranges": [
+        {"side": "base", "path": "producer.py", "start_line": 2, "end_line": 2, "text": "    return None"},
+        {"side": "head", "path": "producer.py", "start_line": 2, "end_line": 2, "text": "    return []"},
+        {"side": "head", "path": "consumer.py", "start_line": 4, "end_line": 7, "text": "    items = fetch_items()\n    if items is None:\n        return 'missing'\n    return items[0]"}
+      ]
+    }
+  ],
+  "consumer-adaptation": [],
+  "generated-churn": [
+    {
+      "id": "empty-result-in-generated-churn",
+      "path": "producer.py",
+      "cause": "fetch_items returns an empty list instead of None; the unchanged consumer only guards None.",
+      "trigger": "Call first_item() when fetch_items has no items.",
+      "consequence": "first_item indexes the empty list and raises IndexError instead of returning 'missing'.",
+      "impact": "The consumer loses its normal empty-state behavior amid otherwise mechanical churn.",
+      "ranges": [
+        {"side": "base", "path": "producer.py", "start_line": 26, "end_line": 26, "text": "    return None"},
+        {"side": "head", "path": "producer.py", "start_line": 26, "end_line": 26, "text": "    return []"},
+        {"side": "head", "path": "consumer.py", "start_line": 4, "end_line": 7, "text": "    items = fetch_items()\n    if items is None:\n        return 'missing'\n    return items[0]"}
+      ]
+    }
+  ]
+}

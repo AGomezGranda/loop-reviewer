@@ -1,6 +1,7 @@
 """Verify import boundaries and keep environment access in CLI wiring."""
 
 import ast
+import subprocess
 import sys
 from collections.abc import Iterator
 from importlib.util import resolve_name
@@ -10,6 +11,9 @@ import pytest
 
 _PACKAGE = Path(__file__).resolve().parents[1] / "src" / "loop_reviewer"
 _REVIEW = f"{_PACKAGE.name}.review"
+_REVIEWER = f"{_PACKAGE.name}.reviewer"
+_REPORT = f"{_REVIEWER}.full_review_contract.FullReviewResult"
+_SOURCE_NAMES = f"{_PACKAGE.name}.source_names"
 _INBOX = f"{_PACKAGE.name}.inbox"
 _CLI_ROOT = _PACKAGE / "cli" / "__init__.py"
 _ENVIRONMENT_APIS = {"environ", "environb", "getenv", "getenvb", "putenv", "unsetenv"}
@@ -41,18 +45,68 @@ def _import_violations(path: Path, *allowed: str) -> list[str]:
     ]
 
 
-def test_review_workflow_imports_only_stdlib_review_and_wire_contract_dependencies() -> (
-    None
-):
-    contract = _PACKAGE / "review" / "inventory_contract.py"
+def test_review_workflow_uses_reviewer_only_at_its_boundary() -> None:
+    reviewer_imports = {
+        "model.py": (_REPORT,),
+        "hosted_report.py": (
+            _REPORT,
+            f"{_REVIEWER}.discussion_contract.DiscussionSnapshotV1",
+            f"{_REVIEWER}.full_review_contract.FullReviewRequest",
+            f"{_REVIEWER}.inventory_contract.InventoryBudget",
+            f"{_REVIEWER}.inventory_contract.PinnedComparison",
+            f"{_REVIEWER}.inventory_contract.canonical_path",
+            f"{_REVIEWER}.local_check_contract.SourceLocation",
+            f"{_REVIEWER}.model_contract.ReviewModel",
+            f"{_REVIEWER}.pinned_source.PinnedSource",
+            f"{_REVIEWER}.python_context.PythonAnalyzer",
+            f"{_REVIEWER}.semantic_review.review_full",
+        ),
+    }
     violations = [
-        violation
+        v
         for path in (_PACKAGE / "review").rglob("*.py")
-        for violation in _import_violations(
-            path, _REVIEW, *(("pydantic",) if path == contract else ())
+        for v in _import_violations(
+            path, _REVIEW, _SOURCE_NAMES, *reviewer_imports.get(path.name, ())
         )
     ]
     assert not violations, "Unexpected review imports:\n" + "\n".join(violations)
+
+
+def test_reviewer_policy_imports_only_stdlib_and_reviewer_contracts() -> None:
+    contracts = {
+        "discussion_contract.py",
+        "discussion_report.py",
+        "full_review_contract.py",
+        "inventory_contract.py",
+        "local_check_contract.py",
+        "model_contract.py",
+        "semantic_contract.py",
+    }
+    violations = [
+        violation
+        for path in (_PACKAGE / "reviewer").glob("*.py")
+        for violation in [
+            *_import_violations(
+                path,
+                _REVIEWER,
+                _SOURCE_NAMES,
+                *(("pydantic",) if path.name in contracts else ()),
+            ),
+            *(
+                f"{path.relative_to(_PACKAGE)}:{line}: {name}"
+                for line, name in _imported_names(path)
+                if _within(name, f"{_REVIEWER}.integrations")
+            ),
+        ]
+    ]
+    assert not violations, "Unexpected reviewer policy imports:\n" + "\n".join(
+        violations
+    )
+
+
+def test_shared_helpers_import_only_stdlib() -> None:
+    assert not _import_violations(_PACKAGE / "integrations" / "review_process.py")
+    assert not _import_violations(_PACKAGE / "source_names.py")
 
 
 def test_inbox_imports_review_only_through_its_read_contract_and_types() -> None:
@@ -98,8 +152,8 @@ def test_cli_handlers_do_not_import_integrations_or_persistence_ports() -> None:
     )
 
 
-def test_cli_output_imports_only_stdlib_and_review_modules() -> None:
-    violations = _import_violations(_PACKAGE / "cli" / "output.py", _REVIEW)
+def test_cli_output_imports_only_stdlib_review_modules_and_the_report() -> None:
+    violations = _import_violations(_PACKAGE / "cli" / "output.py", _REVIEW, _REPORT)
     assert not violations, "Unexpected CLI output imports:\n" + "\n".join(violations)
 
 
@@ -108,6 +162,43 @@ def test_inbox_output_imports_only_stdlib_inbox_and_review_modules() -> None:
         _PACKAGE / "cli" / "inbox_output.py", _INBOX, _REVIEW
     )
     assert not violations, "Unexpected inbox output imports:\n" + "\n".join(violations)
+
+
+@pytest.mark.parametrize("command", ["inventory", "check", "semantic"])
+def test_installed_standalone_command_loads_without_hosted_modules(
+    command: str,
+) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """\
+import sys
+from importlib.metadata import distribution
+
+for module in ('cli', 'composition', 'review', 'inbox', 'local_http'):
+    sys.modules[f'loop_reviewer.{module}'] = None
+entry, = (ep for ep in distribution('loop-reviewer').entry_points if ep.name == sys.argv[1])
+sys.argv = [entry.name, '--help']
+try:
+    entry.load()()
+except SystemExit as error:
+    assert error.code == 0
+assert not any(
+    name.startswith('loop_reviewer.integrations.')
+    and name != 'loop_reviewer.integrations.review_process'
+    for name in sys.modules
+)
+""",
+            f"loop-reviewer-{command}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout.lower()
 
 
 def _direct_open_calls(source: str) -> list[int]:
@@ -135,8 +226,8 @@ def test_direct_open_check(source: str, expected: list[int]) -> None:
 def test_workflows_do_not_call_builtin_open_directly() -> None:
     violations = [
         f"{path.relative_to(_PACKAGE)}:{line}"
-        for workflow in ("review", "inbox")
-        for path in sorted((_PACKAGE / workflow).rglob("*.py"))
+        for workflow in ("review", "inbox", "reviewer")
+        for path in sorted((_PACKAGE / workflow).glob("*.py"))
         for line in _direct_open_calls(path.read_text(encoding="utf-8"))
     ]
     assert not violations, "Direct open() in a workflow:\n" + "\n".join(violations)
@@ -145,7 +236,12 @@ def test_workflows_do_not_call_builtin_open_directly() -> None:
 def test_process_environment_is_accessed_only_at_composition_root() -> None:
     violations: list[str] = []
     for path in _PACKAGE.rglob("*.py"):
-        if path == _CLI_ROOT:
+        if path in (
+            _CLI_ROOT,
+            _PACKAGE / "inventory_cli.py",
+            _PACKAGE / "local_checks_cli.py",
+            _PACKAGE / "semantic_review_cli.py",
+        ):
             continue
         nodes = tuple(ast.walk(ast.parse(path.read_text(encoding="utf-8"))))
         os_names = {
@@ -190,6 +286,10 @@ def test_local_http_only_imports_transport_and_workflows() -> None:
     violations = [
         violation
         for path in (_PACKAGE / "local_http").rglob("*.py")
-        for violation in _import_violations(path, *allowed)
+        for violation in _import_violations(
+            path,
+            *allowed,
+            *((_REPORT,) if path.name in {"review.py", "history.py"} else ()),
+        )
     ]
     assert not violations, "Unexpected HTTP adapter imports:\n" + "\n".join(violations)

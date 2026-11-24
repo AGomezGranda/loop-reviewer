@@ -2,7 +2,6 @@
 
 from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -13,16 +12,20 @@ from tomlkit.exceptions import TOMLKitError
 from tomlkit.items import Table
 from tomlkit.toml_document import TOMLDocument
 
-from loop_reviewer.inbox.configuration import LocalConfigurationError, LocalSettings
-from loop_reviewer.inbox.discovery import ConfigureInbox, RepositoryDiscoveryError
+from loop_reviewer.inbox.configuration import (
+    InboxInputs,
+    LocalConfigurationError,
+    LocalSettings,
+    saved_inbox_inputs,
+    verify_inbox_on_save,
+)
+from loop_reviewer.inbox.discovery import ConfigureInbox
 from loop_reviewer.inbox.model import InboxSettings, JiraProjectKey, RepositoryAddress
 from loop_reviewer.inbox.store import InboxSettingsChanged, InboxStore
 from loop_reviewer.integrations.local_state.posix_lock import (
     LocalLockError,
     private_lock,
 )
-
-type InboxInputs = tuple[tuple[JiraProjectKey, ...], tuple[RepositoryAddress, ...]]
 
 
 class TomlSettings:
@@ -36,9 +39,6 @@ class TomlSettings:
         saved = self._store.settings()
         return self._settings(raw, doc, saved)
 
-    def model(self) -> str | None:
-        return self._model(self._read()[1])
-
     def run(
         self,
         projects: tuple[JiraProjectKey, ...],
@@ -46,7 +46,6 @@ class TomlSettings:
         *,
         expected_version: int | None = None,
         expected_revision: str | None = None,
-        model: str | None = None,
     ) -> LocalSettings:
         with self._lock():
             raw, doc = self._read()
@@ -61,20 +60,10 @@ class TomlSettings:
             ):
                 raise InboxSettingsChanged
 
-            if model:
-                model = _validate_model(model)
-            # An unchanged inbox can be left alone when saving only the model.
-            changed = (projects, addresses) != (current.projects, current.addresses)
-            model_changed = model is not None and (model or None) != current.model
-            verify_inbox = bool(projects or addresses) and (
-                changed or not model_changed
-            )
-            if not (projects or addresses) and current.projects:
-                raise ValueError(
-                    "Configure a Jira project key and at least one repository."
-                )
             repositories = (
-                self._inbox.verify(projects, addresses) if verify_inbox else ()
+                self._inbox.verify(projects, addresses)
+                if verify_inbox_on_save((projects, addresses), current)
+                else ()
             )
             if repositories:
                 canonical = tuple(repo.address for repo in repositories)
@@ -88,13 +77,6 @@ class TomlSettings:
                         urls.append(address.url)
                     urls.multiline(True)
                     inbox["repositories"] = urls
-            if model_changed:
-                reviewer = _editable_table(doc, "reviewer")
-                reviewer["engine"] = "pi"
-                if model:
-                    reviewer["model"] = model
-                else:
-                    del reviewer["model"]
             updated = doc.as_string().encode()
             if updated != raw:
                 self._write(raw, updated)
@@ -117,49 +99,25 @@ class TomlSettings:
             if desired is None:
                 return
             saved = self._store.settings()
-            if desired == _saved_inputs(saved):
+            verified = self._inbox.verify_manual_edit(desired, saved)
+            if not verified:
                 return
-            projects, addresses = desired
-            verified = self._inbox.verify(projects, addresses)
-            if saved is not None:
-                accounts = {
-                    repo.address.host: repo.account for repo in saved.repositories
-                }
-                identities = {
-                    (repo.address.host, repo.address.slug.casefold()): repo.key
-                    for repo in saved.repositories
-                }
-                for address, repo in zip(addresses, verified, strict=True):
-                    if (
-                        accounts.get(address.host, repo.account) != repo.account
-                        or identities.get(
-                            (address.host, address.slug.casefold()), repo.key
-                        )
-                        != repo.key
-                    ):
-                        raise RepositoryDiscoveryError(
-                            "The GitHub account or repository identity changed. Verify the new watch list explicitly in Setup."
-                        )
             self._check_unchanged(raw)
             self._store.replace_settings(
-                projects,
-                tuple(
-                    replace(repo, address=address)
-                    for address, repo in zip(addresses, verified, strict=True)
-                ),
+                desired[0],
+                verified,
                 expected_version=saved.version if saved else 0,
             )
 
     def _settings(
         self, raw: bytes, doc: TOMLDocument, saved: InboxSettings | None
     ) -> LocalSettings:
-        projects, addresses = self._inputs(doc) or _saved_inputs(saved)
+        projects, addresses = self._inputs(doc) or saved_inbox_inputs(saved)
         return LocalSettings(
             projects,
             addresses,
             saved.version if saved else None,
             sha256(raw).hexdigest(),
-            self._model(doc),
         )
 
     def _inputs(self, doc: TOMLDocument) -> InboxInputs | None:
@@ -185,20 +143,6 @@ class TomlSettings:
                 RepositoryAddress.from_url(url)
                 for url in cast("list[str]", repositories)
             )
-        except ValueError as error:
-            raise self._error(str(error)) from None
-
-    def _model(self, doc: TOMLDocument) -> str | None:
-        reviewer = doc.get("reviewer")
-        if reviewer is None:
-            return None
-        if not isinstance(reviewer, Table) or reviewer.get("engine", "pi") != "pi":
-            raise self._error('Set reviewer.engine to "pi".')
-        model = reviewer.get("model")
-        if model is None:
-            return None
-        try:
-            return _validate_model(model)
         except ValueError as error:
             raise self._error(str(error)) from None
 
@@ -255,21 +199,3 @@ def _editable_table(doc: TOMLDocument, name: str) -> Table:
     new = table()
     doc[name] = new
     return new
-
-
-def _saved_inputs(saved: InboxSettings | None) -> InboxInputs:
-    if saved is None:
-        return (), ()
-    return saved.projects, tuple(repo.address for repo in saved.repositories)
-
-
-def _validate_model(model: object) -> str:
-    if (
-        isinstance(model, str)
-        and model.isprintable()
-        and not any(char.isspace() for char in model)
-    ):
-        provider, _, name = model.partition("/")
-        if provider and name:
-            return model
-    raise ValueError("Set the Pi model in PROVIDER/MODEL format.")

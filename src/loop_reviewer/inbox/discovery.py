@@ -1,9 +1,11 @@
 """Verify inbox settings, refresh each repository and project visible work."""
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from typing import Protocol
 
+from loop_reviewer.inbox.configuration import InboxInputs, saved_inbox_inputs
 from loop_reviewer.inbox.model import (
     DiscoveredPullRequest,
     InboxReport,
@@ -92,6 +94,33 @@ class ConfigureInbox:
 
     def settings(self) -> InboxSettings | None:
         return self._store.settings()
+
+    def verify_manual_edit(
+        self, desired: InboxInputs, saved: InboxSettings | None
+    ) -> tuple[WatchedRepository, ...]:
+        if desired == saved_inbox_inputs(saved):
+            return ()
+        projects, addresses = desired
+        verified = self.verify(projects, addresses)
+        if saved is not None:
+            accounts = {repo.address.host: repo.account for repo in saved.repositories}
+            identities = {
+                (repo.address.host, repo.address.slug.casefold()): repo.key
+                for repo in saved.repositories
+            }
+            for address, repo in zip(addresses, verified, strict=True):
+                if (
+                    accounts.get(address.host, repo.account) != repo.account
+                    or identities.get((address.host, address.slug.casefold()), repo.key)
+                    != repo.key
+                ):
+                    raise RepositoryDiscoveryError(
+                        "The GitHub account or repository identity changed. Verify the new watch list explicitly in Setup."
+                    )
+        return tuple(
+            replace(repo, address=address)
+            for address, repo in zip(addresses, verified, strict=True)
+        )
 
     def _verify(self, address: RepositoryAddress) -> WatchedRepository:
         try:

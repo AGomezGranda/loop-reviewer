@@ -1,0 +1,230 @@
+{
+  "schema_version": 2,
+  "policy_version": 1,
+  "comparison": {
+    "merge_base": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "scope": "local_checks",
+  "discussion_status": "not_requested",
+  "usage": {
+    "model_calls": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "estimated_cost_usd_micros": 0,
+    "unaccounted_reserved_usd_micros": 0
+  },
+  "private_leads": [],
+  "linked_existing_threads": [],
+  "error": null,
+  "recommendation": "none",
+  "file_coverage": [
+    {
+      "change_type": "modified",
+      "old": {
+        "path": "a.py",
+        "object_id": "cccccccccccccccccccccccccccccccccccccccc",
+        "mode": "100644",
+        "blob_bytes": 15,
+        "generated": "unknown"
+      },
+      "new": {
+        "path": "a.py",
+        "object_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "mode": "100644",
+        "blob_bytes": 15,
+        "generated": "unknown"
+      },
+      "added_lines": 1,
+      "deleted_lines": 1,
+      "binary": false,
+      "oversized": false,
+      "outcome": "complete",
+      "reason": null,
+      "highest_completed_check": "mechanical",
+      "required_investigation_ids": [
+        "i00001"
+      ],
+      "context_status": "complete"
+    },
+    {
+      "change_type": "modified",
+      "old": {
+        "path": "b.py",
+        "object_id": "cccccccccccccccccccccccccccccccccccccccc",
+        "mode": "100644",
+        "blob_bytes": 15,
+        "generated": "unknown"
+      },
+      "new": {
+        "path": "b.py",
+        "object_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "mode": "100644",
+        "blob_bytes": 15,
+        "generated": "unknown"
+      },
+      "added_lines": 1,
+      "deleted_lines": 1,
+      "binary": false,
+      "oversized": false,
+      "outcome": "complete",
+      "reason": null,
+      "highest_completed_check": "mechanical",
+      "required_investigation_ids": [
+        "i00002"
+      ],
+      "context_status": "complete"
+    }
+  ],
+  "investigation_coverage": [
+    {
+      "kind": "python_compile",
+      "id": "i00001",
+      "path": "a.py",
+      "outcome": "complete",
+      "reason": null,
+      "evidence_ids": [
+        "e00001",
+        "e00002"
+      ]
+    },
+    {
+      "kind": "python_compile",
+      "id": "i00002",
+      "path": "b.py",
+      "outcome": "complete",
+      "reason": null,
+      "evidence_ids": [
+        "e00003",
+        "e00004"
+      ]
+    }
+  ],
+  "evidence_index": [
+    {
+      "side": "base",
+      "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "path": "a.py",
+      "blob_id": "cccccccccccccccccccccccccccccccccccccccc",
+      "kind": "diagnostic",
+      "id": "e00001",
+      "tool": "cpython_compile",
+      "tool_version": "3.15.2",
+      "result": "passed",
+      "message": "fixture",
+      "location": null
+    },
+    {
+      "side": "head",
+      "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "path": "a.py",
+      "blob_id": "dddddddddddddddddddddddddddddddddddddddd",
+      "kind": "diagnostic",
+      "id": "e00002",
+      "tool": "cpython_compile",
+      "tool_version": "3.15.2",
+      "result": "passed",
+      "message": "fixture",
+      "location": null
+    },
+    {
+      "side": "base",
+      "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "path": "b.py",
+      "blob_id": "cccccccccccccccccccccccccccccccccccccccc",
+      "kind": "diagnostic",
+      "id": "e00003",
+      "tool": "cpython_compile",
+      "tool_version": "3.15.2",
+      "result": "passed",
+      "message": "fixture",
+      "location": null
+    },
+    {
+      "side": "head",
+      "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "path": "b.py",
+      "blob_id": "dddddddddddddddddddddddddddddddddddddddd",
+      "kind": "diagnostic",
+      "id": "e00004",
+      "tool": "cpython_compile",
+      "tool_version": "3.15.2",
+      "result": "passed",
+      "message": "fixture",
+      "location": null
+    },
+    {
+      "kind": "source",
+      "id": "e00005",
+      "range": {
+        "side": "base",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "path": "a.py",
+        "blob_id": "cccccccccccccccccccccccccccccccccccccccc",
+        "start_line": 1,
+        "end_line": 2
+      },
+      "role": "base_declaration",
+      "text": "def a():\n  ...\n"
+    },
+    {
+      "kind": "source",
+      "id": "e00006",
+      "range": {
+        "side": "head",
+        "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "path": "a.py",
+        "blob_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "start_line": 1,
+        "end_line": 2
+      },
+      "role": "head_declaration",
+      "text": "def a():\n  f()\n"
+    },
+    {
+      "kind": "source",
+      "id": "e00007",
+      "range": {
+        "side": "head",
+        "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "path": "caller.py",
+        "blob_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "start_line": 1,
+        "end_line": 3
+      },
+      "role": "call_site",
+      "text": "from a import f\nfrom b import g\nf(); g()\n"
+    },
+    {
+      "kind": "source",
+      "id": "e00008",
+      "range": {
+        "side": "base",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "path": "b.py",
+        "blob_id": "cccccccccccccccccccccccccccccccccccccccc",
+        "start_line": 1,
+        "end_line": 2
+      },
+      "role": "base_declaration",
+      "text": "def b():\n  ...\n"
+    },
+    {
+      "kind": "source",
+      "id": "e00009",
+      "range": {
+        "side": "head",
+        "commit_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "path": "b.py",
+        "blob_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "start_line": 1,
+        "end_line": 2
+      },
+      "role": "head_declaration",
+      "text": "def b():\n  f()\n"
+    }
+  ],
+  "findings": [],
+  "status": "complete",
+  "stop_reason": "finished"
+}

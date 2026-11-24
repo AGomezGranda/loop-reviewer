@@ -4,19 +4,26 @@ import os
 import selectors
 import signal
 import subprocess
-import tempfile
-from collections.abc import Generator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from logging import getLogger
 from pathlib import Path
 from shutil import rmtree
 from time import monotonic
 
-from loop_reviewer.review.generate import ReviewerError
-
 
 class OutputLimitExceeded(Exception):
     pass
+
+
+def remove_review_scratch(path: Path, purpose: str) -> None:
+    try:
+        rmtree(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        getLogger(__name__).warning(
+            "Could not remove private %s scratch data.", purpose
+        )
 
 
 def with_absolute_path(environment: Mapping[str, str]) -> dict[str, str]:
@@ -28,34 +35,12 @@ def with_absolute_path(environment: Mapping[str, str]) -> dict[str, str]:
     return child
 
 
-@contextmanager
-def review_scratch(purpose: str) -> Generator[Path]:
-    try:
-        path = Path(tempfile.mkdtemp(prefix=f"loop-reviewer-{purpose}-"))
-    except OSError as error:
-        raise ReviewerError(
-            f"Could not create temporary space for {purpose}. Check permissions and free space.",
-            "failed",
-        ) from error
-    try:
-        yield path
-    finally:
-        try:
-            rmtree(path)
-        except FileNotFoundError:
-            pass
-        except OSError:
-            getLogger(__name__).warning(
-                "Could not remove private %s scratch data.", purpose
-            )
-
-
 def capture_review_process(
     arguments: list[str],
     *,
     cwd: Path,
     env: Mapping[str, str],
-    timeout: int,
+    timeout: float,
     output_limit: int,
     input: bytes | None = None,
     pass_fds: tuple[int, ...] = (),
@@ -119,6 +104,9 @@ def capture_review_process(
                 os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # Some macOS Git invocations allow signalling the child but not its group.
+                child.kill()
             finally:
                 child.wait()
             raise

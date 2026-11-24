@@ -19,7 +19,6 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 	const initial = {
 		settingsVersion: "1",
 		configRevision: "original",
-		reviewerModel: "provider/first",
 		jiraProjectKeys: ["ABC"],
 		repositoryUrls: [first],
 	};
@@ -32,7 +31,6 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 			expect(JSON.parse(String(init.body))).toEqual({
 				settingsVersion: "1",
 				configRevision: "original",
-				reviewerModel: "provider/updated",
 				jiraProjectKeys: ["xyz"],
 				repositoryUrls: [first, second],
 			});
@@ -45,7 +43,6 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 			return Response.json({
 				settingsVersion: "2",
 				configRevision: "saved",
-				reviewerModel: "provider/updated",
 				jiraProjectKeys: ["XYZ"],
 				repositoryUrls: [first, second],
 			});
@@ -63,10 +60,7 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 	const repositories = screen.getByLabelText("Repository URL 1");
 	expect(projects).toHaveProperty("value", "ABC");
 	expect(repositories).toHaveProperty("value", first);
-	const model = screen.getByLabelText("Pi reviewer model");
-	expect(model).toHaveProperty("value", "provider/first");
-	await user.clear(model);
-	await user.type(model, "provider/updated");
+	expect(screen.queryByLabelText("Pi reviewer model")).toBeNull();
 	await user.clear(projects);
 	await user.type(projects, " xyz ");
 	await user.click(screen.getByRole("button", { name: "Add repository" }));
@@ -95,7 +89,6 @@ test("uses refreshed settings while pristine and explicitly reloads after an edi
 	let current = {
 		settingsVersion: "2",
 		configRevision: "current",
-		reviewerModel: null,
 		jiraProjectKeys: ["NEW"],
 		repositoryUrls,
 	};

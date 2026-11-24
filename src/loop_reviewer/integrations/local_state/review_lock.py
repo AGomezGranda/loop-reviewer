@@ -14,7 +14,7 @@ from loop_reviewer.review.generate import Reviewer, ReviewerError
 from loop_reviewer.review.model import ReviewKey
 
 
-class LockedPiExecution:
+class LockedReviewExecution:
     def __init__(
         self, lock_dir: Path, reviewer_factory: Callable[[int], Reviewer]
     ) -> None:

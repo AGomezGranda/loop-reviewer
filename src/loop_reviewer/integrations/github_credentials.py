@@ -30,7 +30,9 @@ def github_environment(environment: Mapping[str, str], host: str) -> dict[str, s
     return _without(environment, removed_tokens)
 
 
-def capture_gh_environment(environment: Mapping[str, str], host: str) -> dict[str, str]:
+def capture_gh_environment(
+    environment: Mapping[str, str], host: str, *, cwd: Path | None = None
+) -> dict[str, str]:
     environment = with_absolute_path(environment)
     scoped = github_environment(environment, host)
     _disable_debug(scoped)
@@ -40,7 +42,7 @@ def capture_gh_environment(environment: Mapping[str, str], host: str) -> dict[st
         if os.name == "posix":
             result = capture_review_process(
                 arguments,
-                cwd=Path.cwd(),
+                cwd=Path.cwd() if cwd is None else cwd,
                 env=scoped,
                 timeout=15,
                 output_limit=_TOKEN_LIMIT,
@@ -48,6 +50,7 @@ def capture_gh_environment(environment: Mapping[str, str], host: str) -> dict[st
         else:
             result = subprocess.run(
                 arguments,
+                cwd=cwd,
                 env=scoped,
                 timeout=15,
                 stdout=subprocess.PIPE,
@@ -88,17 +91,24 @@ def capture_gh_environment(environment: Mapping[str, str], host: str) -> dict[st
 
 @contextmanager
 def open_gh_environment(
-    environment: Mapping[str, str], host: str, *, prefix: str
+    environment: Mapping[str, str],
+    host: str,
+    *,
+    prefix: str,
+    private_capture_cwd: bool = False,
 ) -> Generator[tuple[dict[str, str], Path]]:
-    pinned = capture_gh_environment(environment, host)
+    pinned = None if private_capture_cwd else capture_gh_environment(environment, host)
     try:
         config = TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True)
     except OSError:
         raise GitHubReadError("Could not prepare private GitHub CLI state.") from None
     with config as directory:
+        path = Path(directory)
+        if pinned is None:
+            pinned = capture_gh_environment(environment, host, cwd=path)
         # The empty configuration prevents later commands from loading a different account.
         pinned["GH_CONFIG_DIR"] = directory
-        yield pinned, Path(directory)
+        yield pinned, path
 
 
 def _disable_debug(environment: dict[str, str]) -> None:

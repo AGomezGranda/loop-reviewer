@@ -21,6 +21,8 @@ from loop_reviewer.integrations.local_state.keys import identity_key
 from loop_reviewer.integrations.local_state.review_schema import migrate_reviews
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
 from loop_reviewer.review.drafts import EditReviewDraft
+from loop_reviewer.review.feedback import feedback_markdown
+from loop_reviewer.review.hosted_report import project_report
 from loop_reviewer.review.model import (
     DraftTarget,
     DraftValidationError,
@@ -47,6 +49,9 @@ from loop_reviewer.review.store import (
     ReviewStoreError,
     UnconfirmedPublication,
 )
+from loop_reviewer.reviewer.full_review_contract import FullReviewResult
+from tests.support.hosted_report import offline_report
+from tests.test_local_checks import PINS
 
 _SELECTION = ReviewSelection(
     PullRequestRef("github.com", "acme", "repo", 7),
@@ -67,6 +72,145 @@ _DRAFT = ReviewDraft(
         Finding("low", "unlocated condition", "unlocated consequence", None),
     ),
 )
+
+
+@pytest.mark.parametrize("published", [False, True], ids=["local", "published"])
+def test_original_report_survives_edits_and_completion(
+    tmp_path: Path, published: bool
+) -> None:
+    path = tmp_path / "state.db"
+    store = SqliteReviewRunStore(path)
+    selection = _report_selection()
+    report = _partial_report()
+    assert report.root.status == "partial"
+    original = report.model_dump_json()
+    draft = project_report(report)
+    assert draft.summary == "" and draft.summary_origin == "generated"
+    assert [item.location for item in draft.findings] == [
+        FindingLocation("first.py", 2),
+        FindingLocation("second.py", 2),
+    ]
+    assert [item.condition for item in draft.findings] == [
+        item.trigger for item in report.root.findings
+    ]
+    started = store.start(selection, replaces=None)
+    run = started.finish(GeneratedReview(draft, None, None, report))
+    store.save(run)
+    reopened = SqliteReviewRunStore(path)
+    assert reopened.latest(selection.key) == run
+    assert run.saved_draft().report == report
+
+    edits = EditReviewDraft(reopened)
+    edited = edits.edit_summary(run.draft_target, "My summary")
+    dropped = edits.drop_finding(
+        DraftTarget(run.id, edited.draft_version), 1
+    ).saved_draft()
+    assert dropped.draft.summary == "My summary"
+    assert dropped.draft.verdict == report.root.recommendation
+    assert "private lead canary" not in feedback_markdown(dropped.draft)
+    assert tuple(item.report_id for item in dropped.draft.findings) == tuple(
+        item.id for item in report.root.findings[1:]
+    )
+    updated = reopened.get_draft(run.id)
+    assert updated is not None
+    if published:
+        id = PublicationId("75f718d3-9633-42ad-9097-22f320d068a8")
+        summary_only = build_preview(
+            id, dropped, selection, 123, "comment", frozenset()
+        )
+        assert not summary_only.comments
+        assert (
+            "second.py:2" in summary_only.body and "first.py" not in summary_only.body
+        )
+        assert "private lead canary" not in summary_only.body
+        preview = build_preview(
+            id,
+            dropped,
+            selection,
+            123,
+            "comment",
+            frozenset({FindingLocation("second.py", 2)}),
+        )
+        assert preview.body == f"{id.marker}\n\nMy summary"
+        (comment,) = preview.comments
+        assert comment.path == "second.py" and "private lead canary" not in comment.body
+        reopened.save_preview(preview)
+        reopened.reserve_send(preview.id, "preview")
+        completed = reopened.record_published(
+            preview.id, PublicationReceipt(8, "comment")
+        )
+    else:
+        completed = reopened.complete(updated.complete_locally())
+    assert completed.report == report
+    assert (
+        reopened.completion(run.id)
+        == reopened.completed(selection.identity)
+        == completed
+    )
+    assert reopened.completions(None, 10)[0].report is None
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT reviewer_report FROM review_runs"
+        ).fetchone() == (original,)
+
+
+@pytest.mark.parametrize(
+    "corruption", ["invalid-json", "unknown-version", "other-pins", "missing"]
+)
+def test_saved_report_corruption_is_not_treated_as_legacy(
+    tmp_path: Path, corruption: str
+) -> None:
+    path = tmp_path / "state.db"
+    store = SqliteReviewRunStore(path)
+    report = offline_report("README")
+    start = store.start(_report_selection(), replaces=None)
+    run = start.finish(GeneratedReview(project_report(report), None, None, report))
+    store.save(run)
+    store.complete(run.complete_locally())
+
+    data = report.model_dump()
+    payload: str | None = None
+    if corruption == "invalid-json":
+        payload = "not-json"
+    elif corruption == "unknown-version":
+        payload = json.dumps(data | {"schema_version": 99})
+    elif corruption == "other-pins":
+        data["comparison"]["head"] = "e" * 40
+        payload = FullReviewResult.model_validate(data).model_dump_json()
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE review_runs SET reviewer_report = ?", (payload,))
+
+    with pytest.raises(ReviewStoreError, match="unreadable"):
+        store.get_draft(run.id)
+    with pytest.raises(ReviewStoreError, match="unreadable"):
+        store.completion(run.id)
+    assert store.completions(None, 1)[0].report is None
+
+
+def _report_selection() -> ReviewSelection:
+    return replace(
+        _SELECTION,
+        ref=replace(_SELECTION.ref, repository_id=42),
+        revision=ReviewedRevision("main", PINS.merge_base, PINS.merge_base, PINS.head),
+    )
+
+
+def _partial_report() -> FullReviewResult:
+    result = offline_report("first.py", "second.py")
+    data = result.model_dump()
+    assert len(result.root.findings) == 2
+    data["private_leads"] = (
+        {
+            "id": "c00999",
+            "file_id": result.root.findings[0].file_id,
+            "changed_behavior": "private lead canary",
+            "trigger": "private trigger",
+            "consequence": "private consequence",
+            "missing_fact": "Unverified",
+            "evidence_ids": (),
+        },
+    )
+    return FullReviewResult.model_validate(data)
 
 
 class _PublicationPersistence(DraftStore, PublicationStore, ReviewRunStore, Protocol):
@@ -335,7 +479,7 @@ def test_upgrades_v1_drafts_without_changing_selection(tmp_path: Path) -> None:
         assert connection.execute("SELECT selection FROM review_runs").fetchone() == (
             original_json,
         )
-        assert connection.execute("PRAGMA user_version").fetchone() == (9,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (10,)
     finally:
         connection.close()
 
@@ -365,7 +509,38 @@ def test_upgrades_v8_with_unpriced_draft_and_completion(tmp_path: Path) -> None:
     assert completion.final_draft == ReviewDraft("approved", "legacy", ())
     assert _store(tmp_path).complete(completion) == completion
     with sqlite3.connect(_path(tmp_path)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (9,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (10,)
+
+
+def test_upgrades_v9_without_changing_legacy_feedback_or_pending_send(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    run, preview = _publication_setup(store)
+    pending = store.reserve_send(preview.id, "preview")
+    completed_run = _saved(
+        store, replace(run.selection, ref=replace(run.selection.ref, number=42))
+    )
+    completed = store.complete(completed_run.complete_locally())
+    with sqlite3.connect(_path(tmp_path)) as connection:
+        original = connection.execute(
+            "SELECT preview FROM review_publications"
+        ).fetchone()
+        connection.execute("ALTER TABLE review_runs DROP COLUMN reviewer_report")
+        connection.execute("PRAGMA user_version = 9")
+
+    reopened = _store(tmp_path)
+    assert reopened.get_draft(run.id) == run
+    assert reopened.completion(completed_run.id) == completed
+    assert reopened.unconfirmed_publications() == (pending,)
+    with sqlite3.connect(_path(tmp_path)) as connection:
+        assert (
+            connection.execute("SELECT preview FROM review_publications").fetchone()
+            == original
+        )
+        assert connection.execute("PRAGMA user_version").fetchone() == (10,)
+    reopened.record_rejection(preview.id)
+    assert reopened.complete(run.complete_locally()).final_draft == run.draft
 
 
 def test_upgrades_v4_without_losing_completed_history(tmp_path: Path) -> None:
@@ -388,6 +563,7 @@ def test_upgrades_v4_without_losing_completed_history(tmp_path: Path) -> None:
 
 def _restore_v6_schema(connection: sqlite3.Connection) -> None:
     connection.executescript("""
+        ALTER TABLE review_runs DROP COLUMN reviewer_report;
         ALTER TABLE review_runs DROP COLUMN estimated_cost_usd;
         ALTER TABLE review_runs DROP COLUMN generation_model;
         ALTER TABLE review_completions DROP COLUMN estimated_cost_usd;
@@ -432,7 +608,7 @@ def test_upgrade_from_v5_preserves_edited_drafts_and_local_history(
     assert reopened.completed(_SELECTION.identity) == legacy_completion
     assert reopened.complete(completion) == legacy_completion
     with sqlite3.connect(_path(tmp_path)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (9,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (10,)
         assert connection.execute(
             "SELECT github_review_id, publication_action FROM review_completions"
         ).fetchone() == (None, None)

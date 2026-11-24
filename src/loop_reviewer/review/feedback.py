@@ -30,8 +30,7 @@ def _indent_continuations(text: str, indent: str) -> str:
 
 def feedback_markdown(draft: ReviewDraft) -> str:
     findings = finding_lines(draft, markdown=True)
-    return (
-        "\n".join([draft.summary, "", "## Findings", "", *findings])
-        if findings
-        else draft.summary
-    )
+    sections = [draft.summary] if draft.summary else []
+    if findings:
+        sections.append("\n".join(["## Findings", "", *findings]))
+    return "\n\n".join(sections)

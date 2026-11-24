@@ -1,6 +1,6 @@
 """Read completed reviews from the local coordinator."""
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, override
 
 from fastapi import APIRouter, Path, Query
 
@@ -14,6 +14,7 @@ from loop_reviewer.local_http.models import (
 )
 from loop_reviewer.review.history import ReviewHistory
 from loop_reviewer.review.model import CompletedReview
+from loop_reviewer.reviewer.full_review_contract import FullReviewResult
 
 
 class CompletionResponse(ResponseModel):
@@ -40,6 +41,16 @@ class CompletionResponse(ResponseModel):
         )
 
 
+class CompletionDetail(CompletionResponse):
+    report: FullReviewResult | None
+
+    @classmethod
+    @override
+    def from_completion(cls, completion: CompletedReview) -> CompletionDetail:
+        row = CompletionResponse.from_completion(completion)
+        return cls.model_validate({**row.model_dump(), "report": completion.report})
+
+
 class HistoryPage(ResponseModel):
     completions: list[CompletionResponse]
     next_before: SQLiteId | None
@@ -63,10 +74,10 @@ def routes(history: ReviewHistory) -> APIRouter:
     @router.get("/{runId}")
     def get_completion(
         run_id: Annotated[SQLiteId, Path(alias="runId")],
-    ) -> CompletionResponse:
+    ) -> CompletionDetail:
         item = history.completion(int(run_id))
         if item is None:
             raise ApiError(404, "not_found", "No completion for this review.")
-        return CompletionResponse.from_completion(item)
+        return CompletionDetail.from_completion(item)
 
     return router

@@ -16,7 +16,7 @@ loop-reviewer review "$PR_URL"  # Generate or resume a private draft.
 
 Neither operation posts to GitHub. You don’t need an [inbox](inbox.md) to review a PR by URL. Selecting or reviewing uses the standard GitHub API endpoint for the PR host, not custom `gh` `api_host` overrides. Each selection uses a single captured GitHub credential.
 
-A draft is pinned to the target branch, merge base, and head commit. Reopening the same current comparison under the same GitHub account resumes the saved draft without running Pi or checking its configuration, but still needs access to the PR on GitHub. If the PR advances before completion, reopening can start a separate draft for the new comparison. The old draft remains pinned to its revision and accessible by run ID. There’s no draft list.
+A draft is pinned to the target branch, merge base, and head commit. Reopening the same current comparison under the same GitHub account resumes the saved draft without rerunning analysis or checking model configuration, but still needs access to the PR on GitHub. If the PR advances before completion, reopening can start a separate draft for the new comparison. The old draft remains pinned to its revision and accessible by run ID. There’s no draft list.
 
 Use **Retry review** when the browser offers it, or `loop-reviewer review --retry "$PR_URL"`, to replace a failed or interrupted attempt for the same comparison. If the comparison itself was unsupported, run `review` without `--retry` once a supported revision is available. If the CLI says it saved a draft but couldn’t check history, use the printed `draft show RUN_ID` command to check its status.
 
@@ -34,7 +34,9 @@ loop-reviewer draft copy 42
 
 Each successful edit prints the saved preview and increments its version. Finding numbers are positions in that preview; use the latest numbering and version. If a command reports a stale version, run `draft show` again before retrying.
 
-The CLI’s edit inputs must be regular UTF-8 files of at most 64 KiB per field. It accepts LF and CRLF and saves LF. Keep the files private and delete them when no longer needed. `draft copy` writes Markdown to stdout, not to your clipboard; pipe or redirect it only to a destination you trust. Draft commands work offline without `gh` or Pi.
+The CLI’s edit inputs must be regular UTF-8 files of at most 64 KiB per field. It accepts LF and CRLF and saves LF. Keep the files private and delete them when no longer needed. `draft copy` writes Markdown to stdout, not to your clipboard; pipe or redirect it only to a destination you trust. Draft commands work offline without `gh` or model access.
+
+The original report stays private and unchanged as you edit. A partial report lists unfinished coverage; “No verified findings in the reviewed scope” is not a clean bill of health. A complete report means the required checks finished, not that the PR is safe or approved. Legacy drafts have no original report.
 
 ## Finish privately or publish
 
@@ -42,4 +44,4 @@ Copy any feedback you want to take elsewhere **before** finishing. To record a p
 
 A local finish or successful publication completes the initial review for the whole PR under the saved GitHub account. Other drafts for that PR and account are no longer editable or available via `draft show` or `draft copy`. A later push, retarget, or closure does not start another initial review, even with `--retry`. Follow-up verification of earlier findings is not implemented.
 
-Use **History** in the browser to see the reviewed revision and final feedback, with a GitHub receipt if published. In the CLI, run `loop-reviewer review "$PR_URL"` again; it shows completion history instead of generating a draft. This needs readable PR metadata under the same account, but not Pi.
+Use **History** in the browser to see the reviewed revision and final feedback, with a GitHub receipt if published. In the CLI, run `loop-reviewer review "$PR_URL"` again; it shows completion history instead of generating a draft. This needs readable PR metadata under the same account, but no model access.

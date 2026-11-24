@@ -13,8 +13,8 @@ import pytest
 from loop_reviewer.integrations.review_process import (
     OutputLimitExceeded,
     capture_review_process,
-    review_scratch,
 )
+from loop_reviewer.integrations.review_scratch import review_scratch
 from loop_reviewer.review.generate import ReviewerError
 
 pytestmark = pytest.mark.skipif(
@@ -144,7 +144,7 @@ def test_scratch_creation_failure_is_typed(monkeypatch: pytest.MonkeyPatch) -> N
         raise PermissionError
 
     monkeypatch.setattr(
-        "loop_reviewer.integrations.review_process.tempfile.mkdtemp", denied
+        "loop_reviewer.integrations.review_scratch.tempfile.mkdtemp", denied
     )
     with (
         pytest.raises(ReviewerError, match="Could not create temporary space"),
@@ -163,7 +163,7 @@ def test_cleanup_failure_warns_without_masking_original_error(
         return str(tmp_path)
 
     monkeypatch.setattr(
-        "loop_reviewer.integrations.review_process.tempfile.mkdtemp", scratch_path
+        "loop_reviewer.integrations.review_scratch.tempfile.mkdtemp", scratch_path
     )
     monkeypatch.setattr("loop_reviewer.integrations.review_process.rmtree", denied)
     with pytest.raises(ValueError, match="original"), review_scratch("git"):

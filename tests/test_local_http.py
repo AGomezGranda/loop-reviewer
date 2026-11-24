@@ -30,6 +30,7 @@ from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRu
 from loop_reviewer.local_http.app import create_app
 from loop_reviewer.local_http.serve import BrowserServer
 from loop_reviewer.review.history import ReviewHistory
+from loop_reviewer.review.hosted_report import project_report
 from loop_reviewer.review.model import (
     GeneratedReview,
     PublicationReceipt,
@@ -43,9 +44,9 @@ from loop_reviewer.review.store import ReviewStoreError
 from .support.browser_review import (
     FakePublication,
     FakeReader,
-    FakeReviewer,
     fake_gh_environment,
 )
+from .support.hosted_report import offline_report
 
 _ORIGIN = "http://127.0.0.1:43210"
 _HEADERS = {"Authorization": "Bearer test-capability", "Origin": _ORIGIN}
@@ -66,6 +67,7 @@ def _app(
         origin=origin,
         capability="test-capability",
         read_inbox=workflows.read_inbox,
+        read_cached_inbox=workflows.read_cached_inbox,
         scan_inbox=watcher.scan_now,
         configure_inbox=workflows.configure_inbox(),
         inbox_actions=workflows.inbox_actions(),
@@ -133,6 +135,23 @@ async def test_publication_command_maps_unknown_preview_to_not_found(
     )
     assert response.status_code == 404
     assert response.json()["code"] == "not_found"
+
+
+@pytest.mark.parametrize("action", ["scan", "confirm", "recover"])
+@pytest.mark.parametrize("media_type", ["application/json", "text/plain", None])
+async def test_bodyless_mutation_rejects_any_body(
+    client: httpx.AsyncClient, action: str, media_type: str | None
+) -> None:
+    route = (
+        "/inbox/scan"
+        if action == "scan"
+        else f"/publications/66206015-5d37-4d21-8bf2-10d48d043413/{action}"
+    )
+    headers = _HEADERS | ({"Content-Type": media_type} if media_type else {})
+    response = await client.post(f"/api/v1{route}", headers=headers, content=b"{}")
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_input"
+    assert response.json()["message"] == "This action does not accept a request body."
 
 
 async def test_requires_capability_host_and_write_origin(
@@ -224,11 +243,12 @@ async def test_setup_applies_one_project_to_multiple_repositories(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     urls = ["https://github.com/org/first", "https://github.com/org/second"]
+    account = "alice"
 
     def verify(_self: object, address: RepositoryAddress) -> WatchedRepository:
         if address.slug == "org/unavailable":
             raise RepositoryDiscoveryError("Repository unavailable")
-        return WatchedRepository(address, urls.index(address.url) + 1, "alice")
+        return WatchedRepository(address, urls.index(address.url) + 1, account)
 
     def discover(
         _self: object, repo: WatchedRepository
@@ -259,14 +279,12 @@ async def test_setup_applies_one_project_to_multiple_repositories(
         "jiraProjectKeys": [],
         "repositoryUrls": [],
         "configRevision": empty.json()["configRevision"],
-        "reviewerModel": None,
     }
     body: dict[str, object] = {
         "settingsVersion": None,
         "jiraProjectKeys": [" abc "],
         "repositoryUrls": urls,
         "configRevision": empty.json()["configRevision"],
-        "reviewerModel": "provider/model",
     }
     saved = await client.post(url, json=body, headers=_HEADERS)
     assert saved.status_code == 200
@@ -276,12 +294,10 @@ async def test_setup_applies_one_project_to_multiple_repositories(
         "jiraProjectKeys": ["ABC"],
         "repositoryUrls": urls,
         "configRevision": settings["configRevision"],
-        "reviewerModel": "provider/model",
     }
     path = tmp_path / "config.toml"
     assert loads(path.read_text()) == {
         "inbox": {"jira_project_key": "ABC", "repositories": urls},
-        "reviewer": {"engine": "pi", "model": "provider/model"},
     }
     stale = await client.post(url, json=body, headers=_HEADERS)
     assert stale.status_code == 409
@@ -303,12 +319,13 @@ async def test_setup_applies_one_project_to_multiple_repositories(
     assert failed.status_code == 502
     assert (await client.get(url, headers=_HEADERS)).json() == settings
 
-    path.write_text(path.read_text().replace("provider/model", "provider/edited"))
+    legacy = '\n[reviewer]\nengine = "legacy"\nmodel = 123\n'
+    path.write_text(path.read_text() + legacy)
     conflict = await client.post(url, json=body, headers=_HEADERS)
     assert conflict.status_code == 409
     latest = (await client.get(url, headers=_HEADERS)).json()
     assert latest["settingsVersion"] == settings["settingsVersion"]
-    assert latest["reviewerModel"] == "provider/edited"
+    assert "reviewerModel" not in latest
 
     scanned = await client.post("/api/v1/inbox/scan", headers=_HEADERS)
     assert scanned.status_code == 200
@@ -328,10 +345,25 @@ async def test_setup_applies_one_project_to_multiple_repositories(
         "jiraProjectKeys": ["XYZ"],
         "repositoryUrls": urls[1:],
         "configRevision": updated.json()["configRevision"],
-        "reviewerModel": "provider/edited",
     }
+    assert legacy in path.read_text()
     rescanned = await client.post("/api/v1/inbox/scan", headers=_HEADERS)
     assert [row["title"] for row in rescanned.json()["active"]] == ["[XYZ-1] Check"]
+
+    account = "carol"
+    path.write_text(path.read_text().replace("XYZ", "OTHER"))
+    blocked = await client.get("/api/v1/inbox", headers=_HEADERS)
+    assert blocked.status_code == 502
+    assert "identity changed" in blocked.json()["message"]
+    pending = (await client.get(url, headers=_HEADERS)).json()
+    assert pending["jiraProjectKeys"] == ["OTHER"]
+    accepted = await client.post(url, json=pending, headers=_HEADERS)
+    assert accepted.status_code == 200
+    assert accepted.json()["settingsVersion"] == "3"
+    rescanned = await client.post("/api/v1/inbox/scan", headers=_HEADERS)
+    (row,) = rescanned.json()["active"]
+    assert row["title"] == "[OTHER-1] Check"
+    assert row["identity"]["account"] == "carol"
 
 
 async def test_reconfigured_inbox_rejects_old_row_and_preserves_partial_results(
@@ -370,7 +402,7 @@ async def test_reconfigured_inbox_rejects_old_row_and_preserves_partial_results(
         "settingsVersion": str(existing.version),
         "identity": report["active"][0]["identity"],
     }
-    inbox.replace_settings((JiraProjectKey("ABC"),), (first, second))
+    latest = inbox.replace_settings((JiraProjectKey("ABC"),), (first, second))
     await client.post("/api/v1/inbox/scan", headers=_HEADERS)
     for action in ("open", "later", "restore"):
         result = await client.post(
@@ -378,6 +410,23 @@ async def test_reconfigured_inbox_rejects_old_row_and_preserves_partial_results(
         )
         assert result.status_code == 409
         assert result.json()["code"] == "inbox_changed"
+
+    def offline(_self: object, _address: RepositoryAddress) -> WatchedRepository:
+        raise RepositoryDiscoveryError("Offline")
+
+    monkeypatch.setattr(composition.GhRepositoryDiscovery, "verify", offline)
+    (tmp_path / "config.toml").write_text(
+        '[inbox]\njira_project_key = "XYZ"\nrepositories = ["https://github.com/org/repo"]\n'
+    )
+    blocked = await client.get("/api/v1/inbox", headers=_HEADERS)
+    assert blocked.status_code == 502
+    current = {**stale, "settingsVersion": str(latest.version)}
+    for action, section in (("later", "later"), ("restore", "active")):
+        result = await client.post(
+            f"/api/v1/inbox/{action}", json=current, headers=_HEADERS
+        )
+        assert result.status_code == 200
+        assert [row["url"] for row in result.json()[section]] == [ref.url]
 
 
 async def test_cli_and_http_edit_share_version_and_exact_publication(
@@ -449,10 +498,10 @@ async def test_cli_and_http_edit_share_version_and_exact_publication(
 
     class RecoveringPublication(FakePublication):
         @override
-        def submit(self, _preview: PublicationPreview) -> Literal["unknown"]:
+        def submit(self, preview: PublicationPreview) -> Literal["unknown"]:
             assert (
-                _preview.body
-                == f"{_preview.id.marker}\n\nSaved on the web.\nSecond line."
+                preview.body
+                == f"{preview.id.marker}\n\nSaved on the web.\nSecond line."
             )
             return "unknown"
 
@@ -503,6 +552,52 @@ async def test_cli_and_http_edit_share_version_and_exact_publication(
     )
 
 
+async def test_saved_report_survives_browser_edits_and_is_omitted_from_list(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    report = offline_report("alpha.py", "beta.py")
+    pins = report.root.comparison
+    selection = ReviewSelection(
+        PullRequestRef("github.com", "org", "repo", 1, 42),
+        "reviewer",
+        "teammate",
+        ReviewedRevision("main", pins.merge_base, pins.merge_base, pins.head),
+    )
+    store = SqliteReviewRunStore(tmp_path / "loop-reviewer" / "reviews.sqlite3")
+    run = store.start(selection, replaces=None).finish(
+        GeneratedReview(project_report(report), None, None, report)
+    )
+    store.save(run)
+    url = f"/api/v1/drafts/{run.id}"
+    saved = (await client.get(url, headers=_HEADERS)).json()
+    original = report.model_dump(mode="json")
+    assert saved["report"] == original
+    assert saved["feedback"]["findings"][0]["reportId"] == original["findings"][0]["id"]
+    assert [row["new"]["path"] for row in saved["report"]["file_coverage"]] == [
+        "alpha.py",
+        "beta.py",
+    ]
+    edited = (
+        await client.patch(
+            url,
+            json={"kind": "drop_finding", "number": 1, "version": "1"},
+            headers=_HEADERS,
+        )
+    ).json()
+    assert len(edited["feedback"]["findings"]) == 1
+    assert edited["report"] == original
+    finished = await client.post(
+        f"{url}/finish", json={"version": edited["version"]}, headers=_HEADERS
+    )
+    assert finished.status_code == 200
+    completion = (
+        await client.get(f"/api/v1/history/{run.id}", headers=_HEADERS)
+    ).json()
+    assert completion["report"] == original
+    page = (await client.get("/api/v1/history", headers=_HEADERS)).json()
+    assert "report" not in page["completions"][0]
+
+
 async def test_concurrent_opens_share_review_lock(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -510,17 +605,20 @@ async def test_concurrent_opens_share_review_lock(
     entered = Event()
     release = Event()
 
-    def review(_self: FakeReviewer, _selection: ReviewSelection) -> GeneratedReview:
-        entered.set()
-        assert release.wait(5)
-        return GeneratedReview(
-            ReviewDraft("approved", "Generated once", ()), "provider/model", None
-        )
+    class FakeReviewer:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def review(self, _selection: ReviewSelection) -> GeneratedReview:
+            entered.set()
+            assert release.wait(5)
+            return GeneratedReview(
+                ReviewDraft("approved", "Generated once", ()), "provider/model", None
+            )
 
     monkeypatch.setattr(composition, "open_gh_environment", fake_gh_environment)
     monkeypatch.setattr(composition, "GhPullRequestReader", FakeReader)
-    monkeypatch.setattr(composition, "PiReviewer", FakeReviewer)
-    monkeypatch.setattr(FakeReviewer, "review", review)
+    monkeypatch.setattr(composition, "HostedReportReviewer", FakeReviewer)
 
     async def open_review() -> httpx.Response:
         return await client.post(

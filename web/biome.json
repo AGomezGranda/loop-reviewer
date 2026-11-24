@@ -11,5 +11,27 @@
 	},
 	"css": {
 		"parser": { "tailwindDirectives": true }
-	}
+	},
+	"overrides": [
+		{
+			"includes": ["src/**", "!src/api/client.ts"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedGlobals": {
+							"level": "error",
+							"options": {
+								"deniedGlobals": {
+									"fetch": "Use the shared API client.",
+									"XMLHttpRequest": "Use the shared API client.",
+									"EventSource": "Use the shared API client.",
+									"WebSocket": "Use the shared API client."
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	]
 }

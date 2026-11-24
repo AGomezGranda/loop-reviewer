@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from typing import Annotated, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import Field
 
 from loop_reviewer.inbox.actions import InboxActions
@@ -27,6 +27,7 @@ from loop_reviewer.local_http.models import (
     SQLiteId,
 )
 from loop_reviewer.local_http.review import OpenOutcome, open_outcome, parse_pr
+from loop_reviewer.local_http.session import JsonBodyRoute, require_empty_body
 from loop_reviewer.local_http.watch import BrowserWatch, WatchEvent, WatchResponse
 from loop_reviewer.review.generate import ReviewOutcome
 from loop_reviewer.review.history import ReviewHistory
@@ -46,7 +47,6 @@ class ConfigureInboxRequest(RequestModel):
     jira_project_keys: list[str]
     repository_urls: list[str]
     config_revision: str
-    reviewer_model: str | None = None
 
 
 class InboxConfiguration(ResponseModel):
@@ -54,7 +54,6 @@ class InboxConfiguration(ResponseModel):
     jira_project_keys: list[str]
     repository_urls: list[str]
     config_revision: str
-    reviewer_model: str | None
 
     @classmethod
     def from_settings(cls, settings: LocalSettings) -> InboxConfiguration:
@@ -65,7 +64,6 @@ class InboxConfiguration(ResponseModel):
             jira_project_keys=[project.value for project in settings.projects],
             repository_urls=[address.url for address in settings.addresses],
             config_revision=settings.revision,
-            reviewer_model=settings.model,
         )
 
 
@@ -191,13 +189,14 @@ def _report(read: Callable[[], InboxReport]) -> InboxResponse:
 
 def routes(
     read: Callable[[], InboxReport],
+    read_cached: Callable[[], InboxReport],
     scan: Callable[[], InboxReport],
     configure: ConfigureLocal,
     actions: InboxActions[ReviewOutcome],
     history: ReviewHistory,
     watch: BrowserWatch,
 ) -> APIRouter:
-    router = APIRouter(prefix="/inbox")
+    router = APIRouter(prefix="/inbox", route_class=JsonBodyRoute)
 
     @router.get("")
     def get_inbox() -> InboxResponse:
@@ -219,13 +218,12 @@ def routes(
                 addresses,
                 expected_version=int(body.settings_version or 0),
                 expected_revision=body.config_revision,
-                model=body.reviewer_model,
             )
         except ValueError as error:
             raise ApiError(422, "invalid_input", str(error)) from None
         return InboxConfiguration.from_settings(settings)
 
-    @router.post("/scan")
+    @router.post("/scan", dependencies=[Depends(require_empty_body)])
     def scan_inbox() -> InboxResponse:
         return _report(scan)
 
@@ -239,13 +237,13 @@ def routes(
     def defer_row(body: RowAction) -> InboxResponse:
         ref, expected = body.target()
         actions.defer(ref, expected_target=expected)
-        return _report(read)
+        return _report(read_cached)
 
     @router.post("/restore")
     def restore_row(body: RowAction) -> InboxResponse:
         ref, expected = body.target()
         actions.restore(ref, expected_target=expected)
-        return _report(read)
+        return _report(read_cached)
 
     @router.get(
         "/watch",

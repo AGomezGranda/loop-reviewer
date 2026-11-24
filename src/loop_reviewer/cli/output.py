@@ -18,6 +18,7 @@ from loop_reviewer.review.model import (
 )
 from loop_reviewer.review.publication_model import PublicationPreview
 from loop_reviewer.review.pull_request import PullRequestRef
+from loop_reviewer.reviewer.full_review_contract import FullReviewResult
 
 
 def selection_lines(selection: ReviewSelection) -> list[str]:
@@ -36,7 +37,12 @@ def selection_lines(selection: ReviewSelection) -> list[str]:
 
 
 def render_draft(run: SavedDraft) -> str:
-    findings = finding_lines(run.draft)
+    notice = "private draft; nothing was posted to GitHub"
+    feedback = (
+        f"Recommendation: {run.draft.verdict} ({notice})"
+        if run.report is None
+        else f"Editable feedback ({notice}):"
+    )
     return "\n".join(
         [
             *selection_lines(run.selection),
@@ -44,10 +50,11 @@ def render_draft(run: SavedDraft) -> str:
             f"Run ID: {run.id}",
             f"Version: {run.draft_version}",
             *_generation_lines(run.generation_model, run.estimated_cost_usd),
-            f"Recommendation: {run.draft.verdict} (private draft; nothing was posted to GitHub)",
-            *(["Findings:", *findings] if findings else ["No findings"]),
+            feedback,
+            *_findings_lines(run),
             "Summary:",
             run.draft.summary,
+            *_report_lines(run.report),
         ]
     )
 
@@ -103,16 +110,57 @@ def render_completed_review(review: CompletedReview) -> str:
             *selection_lines(review.selection),
             _comparison_line(review.selection),
             *_generation_lines(review.generation_model, review.estimated_cost_usd),
-            f"Recommendation: {draft.verdict}",
+            f"Recommendation: {draft.verdict}"
+            if review.report is None
+            else "Final feedback:",
             "Summary:",
             draft.summary,
-            *(
-                ["Findings:", *finding_lines(draft)]
-                if draft.findings
-                else ["No findings"]
-            ),
+            *_findings_lines(review),
+            *_report_lines(review.report),
         ]
     )
+
+
+def _findings_lines(review: SavedDraft | CompletedReview) -> list[str]:
+    draft = review.draft if isinstance(review, SavedDraft) else review.final_draft
+    if findings := finding_lines(draft):
+        return ["Findings:", *findings]
+    if (report := review.report) is not None:
+        if report.root.findings:
+            return ["No retained findings"]
+        if report.root.status == "partial":
+            return ["No verified findings in the reviewed scope"]
+    return ["No findings"]
+
+
+def _report_lines(saved: FullReviewResult | None) -> list[str]:
+    if saved is None:
+        return []
+    report = saved.root
+    usage = report.usage
+    lines = [
+        "",
+        "Original reviewer report (private):",
+        f"Scope: {report.scope} · Status: {report.status} · Stop: {report.stop_reason}",
+        f"Original recommendation: {report.recommendation} · Discussion: {report.discussion_status}",
+        f"Usage: {usage.model_calls} model calls · {usage.input_tokens} input / {usage.output_tokens} output tokens",
+        f"Estimated cost: {usage.estimated_cost_usd_micros} USD micros · Held: {usage.unaccounted_reserved_usd_micros} USD micros · Accounting fault: {'yes' if usage.accounting_fault else 'no'}",
+    ]
+    if report.findings:
+        lines.append("Original verified findings:")
+        for item in report.findings:
+            lines.append(
+                f"  {item.id} [{item.severity}] {item.trigger!a} — {item.consequence!a}"
+            )
+    lines.append(f"File coverage ({len(report.file_coverage)}):")
+    for row in report.file_coverage:
+        file = row.new or row.old
+        assert file is not None
+        reason = f" ({row.reason})" if row.reason else ""
+        lines.append(
+            f"  {file.path}: {row.outcome} · {row.highest_completed_check}{reason}"
+        )
+    return lines
 
 
 def _generation_lines(model: str | None, amount: float | None) -> list[str]:

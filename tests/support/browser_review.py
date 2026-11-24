@@ -1,5 +1,6 @@
-"""Run the installed CLI entry point with deterministic external collaborators."""
+"""Exercise hosted CLI and HTTP workflows with real pinned Git and scripted I/O."""
 
+import json
 import os
 from contextlib import nullcontext
 from dataclasses import replace
@@ -9,23 +10,43 @@ from typing import Literal
 from unittest.mock import patch
 
 from loop_reviewer import cli, composition
+from loop_reviewer.integrations import git_comparison
 from loop_reviewer.local_http.serve import serve
-from loop_reviewer.review.model import (
-    Finding,
-    FindingLocation,
-    GeneratedReview,
-    PublicationReceipt,
-    ReviewDraft,
-    ReviewSelection,
-)
+from loop_reviewer.review.model import FindingLocation, PublicationReceipt
 from loop_reviewer.review.publication_model import PublicationPreview
 from loop_reviewer.review.pull_request import (
     PullRequest,
     PullRequestRef,
     ReviewedRevision,
 )
+from loop_reviewer.reviewer.inventory_contract import InventoryBudget
+from loop_reviewer.reviewer.model_contract import (
+    CallQuote,
+    ModelAttempt,
+    ModelCall,
+    TokenQuote,
+    TokenUsage,
+    parse_reply,
+)
+from tests.support.inventory_git import commit, git, init, revision
 
 _REVISION = ReviewedRevision("main", "a" * 40, "b" * 40, "c" * 40)
+
+
+def _fixture(repo: Path) -> ReviewedRevision:
+    if not repo.exists():
+        repo.mkdir()
+        init(repo)
+        (repo / "example.py").write_text("value = 1\n")
+        (repo / "settings.txt").write_text("endpoint=primary\n")
+        commit(repo)
+        git(repo, "switch", "-qc", "changes")
+        (repo / "example.py").write_text("value = )\n")
+        (repo / "settings.txt").write_text("endpoint=retired\n")
+        head = commit(repo)
+        git(repo, "update-ref", "refs/pull/17/head", head)
+    base = revision(repo, "main")
+    return ReviewedRevision("main", base, base, revision(repo, "refs/pull/17/head"))
 
 
 def _pull_request(ref: PullRequestRef) -> PullRequest:
@@ -39,11 +60,6 @@ def _pull_request(ref: PullRequestRef) -> PullRequest:
     )
 
 
-def _count(event: str) -> None:
-    with (Path(os.environ["XDG_STATE_HOME"]) / "events").open("a") as stream:
-        stream.write(event + "\n")
-
-
 class FakeReader:
     def __init__(self, _environment: dict[str, str]) -> None:
         pass
@@ -55,25 +71,50 @@ class FakeReader:
         return _REVISION
 
 
-class FakeReviewer:
-    def __init__(self, *_args: object, **_options: object) -> None:
-        pass
-
-    def review(self, _selection: ReviewSelection) -> GeneratedReview:
-        _count("review")
-        draft = ReviewDraft(
-            "comment",
-            "Original CLI feedback",
-            (
-                Finding(
-                    "high",
-                    "The request can fail.",
-                    "The user sees an error.",
-                    FindingLocation("example.py", 8),
-                ),
-            ),
+class BrowserModel:
+    def quote(self, call: ModelCall) -> CallQuote:
+        return CallQuote(
+            call, call.prompt.encode(), TokenQuote("fixture", 100, 10, 50000, 400000)
         )
-        return GeneratedReview(draft, "provider/model", 0.0234)
+
+    def send(
+        self, call: ModelCall, quote: CallQuote, *, timeout_seconds: float
+    ) -> ModelAttempt:
+        if call.kind != "investigation":
+            raise AssertionError(
+                "An unknown-impact candidate must not reach verification"
+            )
+        packet = json.loads(call.prompt.split("\n\n", 1)[1])
+        head = next(
+            item["id"]
+            for item in packet["excerpts"]
+            if item["range"]["path"] == "settings.txt"
+            and item["range"]["side"] == "head"
+        )
+        response = {
+            "schema_version": 1,
+            "investigation_id": call.unit_id,
+            "kind": "submit_candidates",
+            "reviewed_file_ids": ["p00002"],
+            "candidates": [
+                {
+                    "file_id": "p00002",
+                    "changed_behavior": "The endpoint changes.",
+                    "trigger": "PRIVATE-LEAD-CANARY",
+                    "consequence": "An unproven consumer may fail.",
+                    "proposed_impact": "unknown",
+                    "citations": [{"role": "head_change", "evidence_id": head}],
+                    "proposed_anchor_id": None,
+                }
+            ],
+        }
+        wire = json.dumps(response)
+        return ModelAttempt(
+            "success",
+            TokenUsage(20, 5, 25),
+            parse_reply(call, wire),
+            len(wire.encode()),
+        )
 
 
 class FakePublication:
@@ -92,16 +133,31 @@ class FakePublication:
         return requested
 
     def submit(
-        self, _preview: PublicationPreview
+        self, preview: PublicationPreview
     ) -> PublicationReceipt | Literal["unknown"]:
-        _count("submit")
-        raise AssertionError("The browser handoff smoke never sends a review.")
+        with (Path(os.environ["XDG_STATE_HOME"]) / "sent.jsonl").open("a") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "body": preview.body,
+                        "action": preview.action,
+                        "head": preview.selection.revision.head,
+                        "comments": len(preview.comments),
+                    }
+                )
+                + "\n"
+            )
+        return PublicationReceipt(71, preview.action)
 
 
 def fake_gh_environment(
-    environment: dict[str, str], _host: str, *, prefix: str
-) -> nullcontext[tuple[dict[str, str], str]]:
-    return nullcontext((environment, "fixture"))
+    environment: dict[str, str],
+    _host: str,
+    *,
+    prefix: str,
+    private_capture_cwd: bool = False,
+) -> nullcontext[tuple[dict[str, str], Path]]:
+    return nullcontext((environment, Path.cwd()))
 
 
 def fake_publication(
@@ -110,11 +166,33 @@ def fake_publication(
     return nullcontext(FakePublication())
 
 
+def _model(_environment: dict[str, str]) -> tuple[InventoryBudget, BrowserModel, str]:
+    with (Path(os.environ["XDG_STATE_HOME"]) / "events").open("a") as stream:
+        stream.write("review\n")
+    return (
+        InventoryBudget(max_model_spend_usd_micros=100),
+        BrowserModel(),
+        "fixture/model",
+    )
+
+
 if __name__ == "__main__":
+    repo = Path(os.environ["XDG_STATE_HOME"]) / "fixture-git"
+    _REVISION = _fixture(repo)
+
+    def remote(_ref: PullRequestRef) -> str:
+        return str(repo)
+
     with (
+        patch.object(git_comparison, "_remote_url", remote),
         patch.object(composition, "open_gh_environment", fake_gh_environment),
         patch.object(composition, "GhPullRequestReader", FakeReader),
-        patch.object(composition, "PiReviewer", FakeReviewer),
+        patch.object(
+            composition.GhDiscussionReader,
+            "read",
+            side_effect=composition.GitHubReadError("Fixture discussion unavailable"),
+        ),
+        patch.object(composition, "_hosted_model", _model),
         patch.object(composition, "open_gh_publication", fake_publication),
         patch.object(cli, "serve", partial(serve, open_browser=lambda _url: False)),
     ):

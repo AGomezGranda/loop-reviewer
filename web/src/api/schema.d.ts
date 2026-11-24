@@ -330,14 +330,132 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** BehaviorInvestigation */
+        BehaviorInvestigation: {
+            /** Discarded Candidates */
+            discarded_candidates: components["schemas"]["CandidateDecision"][];
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "behavior";
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "complete" | "unfinished";
+            /** Path */
+            path: string;
+            /** Reason */
+            reason: ("work_limit" | "budget_exhausted" | "accounting_fault" | "invalid_output" | "truncated" | "transient_error" | "refused" | "unsupported_model") | ("missing_evidence" | "not_scheduled" | "unsupported_language") | null;
+        };
+        /** CandidateDecision */
+        CandidateDecision: {
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** Id */
+            id: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "contradicted" | "preexisting" | "duplicate";
+        };
+        /** CaptureOmission */
+        CaptureOmission: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "read_error" | "invalid_response" | "limit_reached" | "selection_changed";
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "identity" | "threads" | "replies" | "reviews" | "conversation";
+            /** Thread Id */
+            thread_id: string | null;
+        };
+        /** CompleteFullReview */
+        CompleteFullReview: {
+            comparison: components["schemas"]["PinnedComparison"];
+            discussion: components["schemas"]["DiscussionSummary"] | null;
+            /** Discussion References */
+            discussion_references: components["schemas"]["DiscussionReference"][];
+            /** Discussion Status */
+            discussion_status: ("complete" | "partial" | "unavailable") | "not_requested";
+            /** Error */
+            error: null;
+            /** Evidence Index */
+            evidence_index: (components["schemas"]["SourceEvidence"] | components["schemas"]["DiagnosticEvidence"])[];
+            /** File Coverage */
+            file_coverage: components["schemas"]["SemanticCoverage"][];
+            /** Findings */
+            findings: components["schemas"]["SemanticFinding"][];
+            /** Investigation Coverage */
+            investigation_coverage: (components["schemas"]["Investigation"] | components["schemas"]["BehaviorInvestigation"])[];
+            /** Linked Existing Threads */
+            linked_existing_threads: components["schemas"]["LinkedExistingThread"][];
+            /** Policy Version */
+            policy_version: number;
+            /** Private Leads */
+            private_leads: components["schemas"]["SemanticLead"][];
+            /**
+             * Recommendation
+             * @enum {string}
+             */
+            recommendation: "comment" | "none";
+            /** Schema Version */
+            schema_version: number;
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "full_review";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "complete";
+            /**
+             * Stop Reason
+             * @constant
+             */
+            stop_reason: "finished";
+            usage: components["schemas"]["SemanticUsage"];
+        };
         /** CompletedOutcome */
         CompletedOutcome: {
-            completion: components["schemas"]["CompletionResponse"];
+            completion: components["schemas"]["CompletionDetail"];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
             kind: "completion";
+        };
+        /** CompletionDetail */
+        CompletionDetail: {
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "not_published" | "published";
+            /** Estimatedcostusd */
+            estimatedCostUsd: number | null;
+            feedback: components["schemas"]["FeedbackResponse"];
+            /** Generationmodel */
+            generationModel: string | null;
+            receipt: components["schemas"]["ReceiptResponse"] | null;
+            report: components["schemas"]["FullReviewResult"] | null;
+            /** Runid */
+            runId: string;
+            selection: components["schemas"]["SelectionResponse"];
+            /** Version */
+            version: string;
         };
         /** CompletionResponse */
         CompletionResponse: {
@@ -366,8 +484,6 @@ export interface components {
             jiraProjectKeys: string[];
             /** Repositoryurls */
             repositoryUrls: string[];
-            /** Reviewermodel */
-            reviewerModel?: string | null;
             /** Settingsversion */
             settingsVersion: string | null;
         };
@@ -394,6 +510,89 @@ export interface components {
             /** Markdown */
             markdown: string;
         };
+        /** DiagnosticEvidence */
+        DiagnosticEvidence: {
+            /** Blob Id */
+            blob_id: string;
+            /** Commit Id */
+            commit_id: string;
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "diagnostic";
+            location: components["schemas"]["SourceLocation"] | null;
+            /** Message */
+            message: string;
+            /** Path */
+            path: string;
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "passed" | "syntax_error";
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "base" | "head";
+            /**
+             * Tool
+             * @constant
+             */
+            tool: "cpython_compile";
+            /** Tool Version */
+            tool_version: string;
+        };
+        /** DiscussionReference */
+        DiscussionReference: {
+            /** Investigation Id */
+            investigation_id: string;
+            /** Is Outdated */
+            is_outdated: boolean | null;
+            /** Is Resolved */
+            is_resolved: boolean | null;
+            /** Item Id */
+            item_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "thread" | "review" | "conversation";
+            /** Permalink */
+            permalink: string | null;
+        };
+        /** DiscussionSummary */
+        DiscussionSummary: {
+            /** Capture Omissions */
+            capture_omissions: components["schemas"]["CaptureOmission"][];
+            /**
+             * Captured At
+             * Format: date-time
+             */
+            captured_at: string;
+            /** Mapping Omissions */
+            mapping_omissions: components["schemas"]["MappingOmission"][];
+            target: components["schemas"]["DiscussionTarget"];
+        };
+        /** DiscussionTarget */
+        DiscussionTarget: {
+            comparison: components["schemas"]["PinnedComparison"];
+            /** Host */
+            host: string;
+            /** Number */
+            number: number;
+            /** Owner */
+            owner: string;
+            /** Repo */
+            repo: string;
+            /** Repository Id */
+            repository_id: number;
+            /** Target Branch */
+            target_branch: string;
+        };
         /** DraftOutcome */
         DraftOutcome: {
             /** Changes */
@@ -419,6 +618,7 @@ export interface components {
             generationModel: string | null;
             /** Publicationid */
             publicationId: string | null;
+            report: components["schemas"]["FullReviewResult"] | null;
             /** Runid */
             runId: string;
             selection: components["schemas"]["SelectionResponse"];
@@ -482,6 +682,54 @@ export interface components {
             /** Publicationid */
             publicationId?: string | null;
         };
+        /** FailedFullReview */
+        FailedFullReview: {
+            comparison: components["schemas"]["PinnedComparison"];
+            discussion: components["schemas"]["DiscussionSummary"] | null;
+            /** Discussion References */
+            discussion_references: unknown[];
+            /** Discussion Status */
+            discussion_status: ("complete" | "partial" | "unavailable") | "not_requested";
+            /** Error */
+            error: components["schemas"]["InventoryError"] | components["schemas"]["InvalidReport"];
+            /** Evidence Index */
+            evidence_index: unknown[];
+            /** File Coverage */
+            file_coverage: unknown[];
+            /** Findings */
+            findings: unknown[];
+            /** Investigation Coverage */
+            investigation_coverage: unknown[];
+            /** Linked Existing Threads */
+            linked_existing_threads: unknown[];
+            /** Policy Version */
+            policy_version: number;
+            /** Private Leads */
+            private_leads: unknown[];
+            /**
+             * Recommendation
+             * @constant
+             */
+            recommendation: "none";
+            /** Schema Version */
+            schema_version: number;
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "full_review";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "failed";
+            /**
+             * Stop Reason
+             * @constant
+             */
+            stop_reason: "fatal_error";
+            usage: components["schemas"]["SemanticUsage"];
+        };
         /** FailedOutcome */
         FailedOutcome: {
             /**
@@ -504,7 +752,26 @@ export interface components {
              * Verdict
              * @enum {string}
              */
-            verdict: "approved" | "comment";
+            verdict: "approved" | "comment" | "none";
+        };
+        /** FileSide */
+        FileSide: {
+            /** Blob Bytes */
+            blob_bytes: number | null;
+            /**
+             * Generated
+             * @enum {string}
+             */
+            generated: "marked" | "unmarked" | "unknown";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "100644" | "100755" | "120000" | "160000";
+            /** Object Id */
+            object_id: string;
+            /** Path */
+            path: string;
         };
         /** FindingResponse */
         FindingResponse: {
@@ -518,12 +785,16 @@ export interface components {
             number: number;
             /** Path */
             path: string | null;
+            /** Reportid */
+            reportId: string | null;
             /**
              * Severity
              * @enum {string}
              */
             severity: "high" | "medium" | "low";
         };
+        /** FullReviewResult */
+        FullReviewResult: components["schemas"]["CompleteFullReview"] | components["schemas"]["PartialFullReview"] | components["schemas"]["FailedFullReview"];
         /** HistoryPage */
         HistoryPage: {
             /** Completions */
@@ -539,8 +810,6 @@ export interface components {
             jiraProjectKeys: string[];
             /** Repositoryurls */
             repositoryUrls: string[];
-            /** Reviewermodel */
-            reviewerModel: string | null;
             /** Settingsversion */
             settingsVersion: string | null;
         };
@@ -571,6 +840,76 @@ export interface components {
             /** Path */
             path: string;
         };
+        /** InvalidReport */
+        InvalidReport: {
+            /**
+             * Code
+             * @constant
+             */
+            code: "invalid_report";
+            /** Message */
+            message: string;
+        };
+        /** InventoryError */
+        InventoryError: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "invalid_repository" | "git_unavailable" | "missing_commit" | "invalid_comparison" | "invalid_inventory" | "git_error" | "work_limit";
+            /** Message */
+            message: string;
+        };
+        /** Investigation */
+        Investigation: {
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "python_compile";
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "complete" | "unfinished";
+            /** Path */
+            path: string;
+            /** Reason */
+            reason: ("work_limit" | "missing_evidence") | null;
+        };
+        /** LinkedExistingThread */
+        LinkedExistingThread: {
+            /** Candidate Id */
+            candidate_id: string;
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** Investigation Id */
+            investigation_id: string;
+            /**
+             * Reason
+             * @constant
+             */
+            reason: "existing_thread";
+            /** Thread Id */
+            thread_id: string;
+        };
+        /** MappingOmission */
+        MappingOmission: {
+            /**
+             * Code
+             * @constant
+             */
+            code: "limit_reached";
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "mapping";
+        };
         /** OpenReview */
         OpenReview: {
             /**
@@ -580,6 +919,61 @@ export interface components {
             retry: boolean;
             /** Url */
             url: string;
+        };
+        /** PartialFullReview */
+        PartialFullReview: {
+            comparison: components["schemas"]["PinnedComparison"];
+            discussion: components["schemas"]["DiscussionSummary"] | null;
+            /** Discussion References */
+            discussion_references: components["schemas"]["DiscussionReference"][];
+            /** Discussion Status */
+            discussion_status: ("complete" | "partial" | "unavailable") | "not_requested";
+            /** Error */
+            error: null;
+            /** Evidence Index */
+            evidence_index: (components["schemas"]["SourceEvidence"] | components["schemas"]["DiagnosticEvidence"])[];
+            /** File Coverage */
+            file_coverage: components["schemas"]["SemanticCoverage"][];
+            /** Findings */
+            findings: components["schemas"]["SemanticFinding"][];
+            /** Investigation Coverage */
+            investigation_coverage: (components["schemas"]["Investigation"] | components["schemas"]["BehaviorInvestigation"])[];
+            /** Linked Existing Threads */
+            linked_existing_threads: components["schemas"]["LinkedExistingThread"][];
+            /** Policy Version */
+            policy_version: number;
+            /** Private Leads */
+            private_leads: components["schemas"]["SemanticLead"][];
+            /**
+             * Recommendation
+             * @enum {string}
+             */
+            recommendation: "comment" | "none";
+            /** Schema Version */
+            schema_version: number;
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "full_review";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "partial";
+            /**
+             * Stop Reason
+             * @enum {string}
+             */
+            stop_reason: "finished" | "work_limit" | "budget_exhausted";
+            usage: components["schemas"]["SemanticUsage"];
+        };
+        /** PinnedComparison */
+        PinnedComparison: {
+            /** Head */
+            head: string;
+            /** Merge Base */
+            merge_base: string;
         };
         /** PreviewOptions */
         PreviewOptions: {
@@ -724,6 +1118,139 @@ export interface components {
             targetBranch: string;
             /** Url */
             url: string;
+        };
+        /** SemanticCoverage */
+        SemanticCoverage: {
+            /** Added Lines */
+            added_lines: number | null;
+            /** Binary */
+            binary: boolean;
+            /**
+             * Change Type
+             * @enum {string}
+             */
+            change_type: "added" | "deleted" | "modified" | "renamed" | "type_changed";
+            /** Deleted Lines */
+            deleted_lines: number | null;
+            /** File Id */
+            file_id: string;
+            /**
+             * Highest Completed Check
+             * @enum {string}
+             */
+            highest_completed_check: "inventory_only" | "mechanical" | "semantic";
+            new: components["schemas"]["FileSide"] | null;
+            old: components["schemas"]["FileSide"] | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "excluded" | "complete" | "unfinished";
+            /** Oversized */
+            oversized: boolean;
+            /** Reason */
+            reason: ("work_limit" | "budget_exhausted" | "accounting_fault" | "invalid_output" | "truncated" | "transient_error" | "refused" | "unsupported_model") | ("missing_evidence" | "not_scheduled" | "unsupported_language") | "binary" | null;
+            /** Required Investigation Ids */
+            required_investigation_ids: string[];
+        };
+        /** SemanticFinding */
+        SemanticFinding: {
+            anchor: components["schemas"]["SourceLocation"] | null;
+            /** Changed Behavior */
+            changed_behavior: string;
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "confirmed" | "high";
+            /** Consequence */
+            consequence: string;
+            /**
+             * Decision Reason
+             * @enum {string}
+             */
+            decision_reason: "reproduced_regression" | "supported_by_source";
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** File Id */
+            file_id: string;
+            /** Id */
+            id: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "high" | "medium" | "low";
+            /** Trigger */
+            trigger: string;
+        };
+        /** SemanticLead */
+        SemanticLead: {
+            /** Changed Behavior */
+            changed_behavior: string;
+            /** Consequence */
+            consequence: string;
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** File Id */
+            file_id: string;
+            /** Id */
+            id: string;
+            /** Missing Fact */
+            missing_fact: string;
+            /** Trigger */
+            trigger: string;
+        };
+        /** SemanticUsage */
+        SemanticUsage: {
+            /** Accounting Fault */
+            accounting_fault: boolean;
+            /** Estimated Cost Usd Micros */
+            estimated_cost_usd_micros: number;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Model Calls */
+            model_calls: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Unaccounted Reserved Usd Micros */
+            unaccounted_reserved_usd_micros: number;
+        };
+        /** SourceEvidence */
+        SourceEvidence: {
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "source";
+            range: components["schemas"]["SourceLocation"];
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "base_declaration" | "head_declaration" | "call_site" | "test_call" | "text_match" | "check_location";
+            /** Text */
+            text: string;
+        };
+        /** SourceLocation */
+        SourceLocation: {
+            /** Blob Id */
+            blob_id: string;
+            /** Commit Id */
+            commit_id: string;
+            /** End Line */
+            end_line: number;
+            /** Path */
+            path: string;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "base" | "head";
+            /** Start Line */
+            start_line: number;
         };
         /** UnavailableOutcome */
         UnavailableOutcome: {
@@ -1089,7 +1616,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CompletionResponse"];
+                    "application/json": components["schemas"]["CompletionDetail"];
                 };
             };
             /** @description Unauthorized */
@@ -1402,7 +1929,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CompletionResponse"];
+                    "application/json": components["schemas"]["CompletionDetail"];
                 };
             };
             /** @description Unauthorized */

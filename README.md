@@ -4,7 +4,7 @@ Loop-reviewer turns a GitHub pull request into a private, editable review draft.
 
 ## Quickstart
 
-Use macOS or Linux with a local filesystem. Install `mise`, Git, the GitHub CLI (`gh`), and the Pi CLI (`pi`). Configure Pi for a model you’re allowed to send the PR diff to.
+Use macOS or Linux with a local filesystem. Install `mise`, Git 2.43 or newer, and the GitHub CLI (`gh`).
 
 From the repository checkout:
 
@@ -14,7 +14,7 @@ mise install
 mise run setup
 ```
 
-Sign in with `gh auth login` if needed (add `--hostname HOST` for the PR’s GitHub host). Set your Pi model in **Setup** in the browser or in [`config.toml`](docs/configuration.md). Then open the browser workspace or review a PR from the terminal.
+Sign in with `gh auth login` if needed (add `--hostname HOST` for the PR’s GitHub host). Then open the browser workspace or review a PR from the terminal.
 
 ```sh
 # Browser: paste a PR URL and select Open review.
@@ -24,13 +24,13 @@ mise exec -- uv run --locked loop-reviewer ui
 mise exec -- uv run --locked loop-reviewer review https://github.com/OWNER/REPO/pull/123
 ```
 
-Inbox setup is optional. Generating a draft sends the selected diff to your configured Pi provider; it does not post to GitHub. For the CLI examples in the guides, use the same `mise exec -- uv run --locked` prefix if `loop-reviewer` isn’t on your `PATH`.
+Inbox setup is optional. New drafts use the pinned 2.0 reviewer. Analysis currently runs locally without a model and reports coverage gaps; generating a draft does not post to GitHub. For the CLI examples in the guides, use the same `mise exec -- uv run --locked` prefix if `loop-reviewer` isn’t on your `PATH`.
 
 ## Guides
 
 - [Review a PR](docs/reviewing.md) — open the workspace, resume and edit drafts, or finish privately.
 - [Publish and recover](docs/publishing.md) — inspect the exact payload before sending and handle interrupted submissions.
-- [Configure Loop-reviewer](docs/configuration.md) — share repositories, the Jira project key, and the Pi model between TOML, the CLI, and the browser.
+- [Configure Loop-reviewer](docs/configuration.md) — share inbox settings and learn how model consent works.
 - [Set up the inbox](docs/inbox.md) — discover PRs, defer work, and share a polling schedule across interfaces.
 - [Local data and upgrades](docs/local-state.md) — understand what stays local, where state lives, and how to back it up.
 - [Develop and package](docs/development.md) — run checks, build distributions, and find the code behind each workflow.

@@ -11,6 +11,9 @@ dependencies = [
 
 [project.scripts]
 loop-reviewer = "loop_reviewer.cli:main"
+loop-reviewer-inventory = "loop_reviewer.inventory_cli:main"
+loop-reviewer-check = "loop_reviewer.local_checks_cli:main"
+loop-reviewer-semantic = "loop_reviewer.semantic_review_cli:main"
 
 [dependency-groups]
 dev = [
@@ -33,7 +36,11 @@ extend-select = ["TID251"]
 "src/loop_reviewer/local_http/serve.py" = ["TID251"]
 "src/loop_reviewer/composition.py" = ["TID251"]
 "src/loop_reviewer/cli/__init__.py" = ["TID251"]
+"src/loop_reviewer/local_checks_cli.py" = ["TID251"]
+"src/loop_reviewer/semantic_review_cli.py" = ["TID251"]
+"src/loop_reviewer/inventory_cli.py" = ["TID251"]
 "src/loop_reviewer/integrations/**/*.py" = ["TID251"]
+"src/loop_reviewer/reviewer/integrations/**/*.py" = ["TID251"]
 "tests/**/*.py" = ["TID251"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]

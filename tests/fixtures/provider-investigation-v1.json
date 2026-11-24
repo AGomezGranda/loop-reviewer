@@ -1,0 +1,120 @@
+{
+  "$defs": {
+    "Candidate": {
+      "additionalProperties": false,
+      "properties": {
+        "file_id": {
+          "type": "string"
+        },
+        "changed_behavior": {
+          "type": "string"
+        },
+        "trigger": {
+          "type": "string"
+        },
+        "consequence": {
+          "type": "string"
+        },
+        "proposed_impact": {
+          "enum": [
+            "data_loss",
+            "access_control_failure",
+            "core_workflow_outage",
+            "material_incorrect_behavior",
+            "localized_recoverable_regression",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "citations": {
+          "items": {
+            "$ref": "#/$defs/Citation"
+          },
+          "type": "array"
+        },
+        "proposed_anchor_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "file_id",
+        "changed_behavior",
+        "trigger",
+        "consequence",
+        "proposed_impact",
+        "citations",
+        "proposed_anchor_id"
+      ],
+      "type": "object"
+    },
+    "Citation": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "base_behavior",
+            "head_change",
+            "trigger",
+            "consumer",
+            "consequence",
+            "impact"
+          ],
+          "type": "string"
+        },
+        "evidence_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "evidence_id"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "enum": [
+        1
+      ],
+      "type": "integer"
+    },
+    "investigation_id": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "submit_candidates"
+      ],
+      "type": "string"
+    },
+    "reviewed_file_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/Candidate"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "investigation_id",
+    "kind",
+    "reviewed_file_ids",
+    "candidates"
+  ],
+  "type": "object"
+}

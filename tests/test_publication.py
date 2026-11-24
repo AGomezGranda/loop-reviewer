@@ -9,6 +9,8 @@ from typing import Literal
 import pytest
 
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
+from loop_reviewer.review.feedback import feedback_markdown
+from loop_reviewer.review.hosted_report import project_report
 from loop_reviewer.review.model import (
     CompletedReview,
     Finding,
@@ -45,6 +47,7 @@ from loop_reviewer.review.pull_request import (
 )
 from loop_reviewer.review.selection import GitHubReadError
 from loop_reviewer.review.store import DraftConflict
+from tests.support.hosted_report import offline_report
 
 _ID = PublicationId("75f718d3-9633-42ad-9097-22f320d068a8")
 _MARKER = "<!-- loop-reviewer:75f718d3-9633-42ad-9097-22f320d068a8 -->"
@@ -104,6 +107,66 @@ def test_payload_routes_retained_findings_once(summary_only: bool) -> None:
     assert (
         preview.body
         == f"{_MARKER}\n\nEdited summary\n\n## Findings\n\n" + "\n\n".join(blocks)
+    )
+
+
+@pytest.mark.parametrize("partial", [False, True], ids=["complete", "partial"])
+def test_empty_report_draft_requires_explicit_approval_or_comment_text(
+    partial: bool,
+) -> None:
+    report = offline_report("README") if partial else offline_report()
+    assert report.root.status == ("partial" if partial else "complete")
+    draft = project_report(report)
+    assert draft.verdict == "none"
+    pins = report.root.comparison
+    selection = replace(
+        _SELECTION,
+        revision=ReviewedRevision("main", pins.merge_base, pins.merge_base, pins.head),
+    )
+    saved = SavedDraft(1, 1, selection, draft, report=report)
+    with pytest.raises(PublicationError, match="comment text"):
+        build_preview(_ID, saved, selection, 123, "comment", frozenset())
+    approved = build_preview(_ID, saved, selection, 123, "approve", frozenset())
+    assert approved.body == f"{_MARKER}\n\nReview submitted for the pinned revision."
+    assert not approved.comments
+    assert feedback_markdown(draft) == ""
+
+    edited = replace(saved, draft=draft.replace_summary("My comment"))
+    commented = build_preview(_ID, edited, selection, 123, "comment", frozenset())
+    assert commented.body == f"{_MARKER}\n\nMy comment"
+
+
+@pytest.mark.parametrize("inline", [True, False], ids=["inline", "body"])
+def test_report_draft_renders_only_retained_feedback(inline: bool) -> None:
+    location = FindingLocation("src/file.py", 8)
+    draft = ReviewDraft(
+        "comment",
+        "",
+        (
+            Finding("high", "Retained trigger", "Retained consequence", location),
+            Finding("low", "Dropped trigger", "Dropped consequence", None),
+        ),
+        summary_origin="generated",
+    ).drop_finding(2)
+    preview = build_preview(
+        _ID,
+        SavedDraft(1, 2, _SELECTION, draft),
+        _SELECTION,
+        123,
+        "comment",
+        frozenset({location}) if inline else frozenset(),
+    )
+    block = "**High**\n\nRetained trigger\n\nRetained consequence"
+    if inline:
+        assert preview.body == f"{_MARKER}\n\nReview submitted for the pinned revision."
+        assert tuple(comment.body for comment in preview.comments) == (block,)
+    else:
+        assert preview.body == f"{_MARKER}\n\n## Findings\n\n" + block.replace(
+            "**High**", "**High** (`src/file.py:8`)"
+        )
+        assert not preview.comments
+    assert feedback_markdown(draft).startswith(
+        "## Findings\n\n1. [high] Retained trigger"
     )
 
 
