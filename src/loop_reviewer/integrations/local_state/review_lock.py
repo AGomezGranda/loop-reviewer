@@ -14,6 +14,11 @@ from loop_reviewer.review.generate import Reviewer, ReviewerError
 from loop_reviewer.review.model import ReviewKey
 
 
+def _lock_name(key: ReviewKey) -> str:
+    name = hashlib.sha256(comparison_key(key).encode("utf-8")).hexdigest()
+    return f"{name}.lock"
+
+
 class LockedReviewExecution:
     def __init__(
         self, lock_dir: Path, reviewer_factory: Callable[[int], Reviewer]
@@ -23,9 +28,8 @@ class LockedReviewExecution:
 
     @contextmanager
     def acquire(self, key: ReviewKey) -> Generator[Reviewer | None]:
-        name = hashlib.sha256(comparison_key(key).encode("utf-8")).hexdigest()
         try:
-            with private_lock(self._lock_dir, f"{name}.lock") as descriptor:
+            with private_lock(self._lock_dir, _lock_name(key)) as descriptor:
                 yield None if descriptor is None else self._reviewer_factory(descriptor)
         except LocalLockError as error:
             guidance = {
