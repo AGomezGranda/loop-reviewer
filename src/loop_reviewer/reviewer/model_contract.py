@@ -4,8 +4,9 @@ import json
 from dataclasses import dataclass
 from typing import Annotated, Literal, Protocol, Self
 
-from pydantic import Field, model_validator
+from pydantic import AfterValidator, Field, model_validator
 
+from loop_reviewer.feedback_text import validate_feedback_text
 from loop_reviewer.reviewer.inventory_contract import _Record
 
 ModelKind = Literal["investigation", "verification"]
@@ -29,6 +30,7 @@ CitationRole = Literal[
     "base_behavior", "head_change", "trigger", "consumer", "consequence", "impact"
 ]
 _Text = Annotated[str, Field(min_length=1, max_length=1024)]
+_FeedbackText = Annotated[_Text, AfterValidator(validate_feedback_text)]
 _EvidenceId = Annotated[str, Field(pattern=r"^e[0-9]{5}$")]
 _FileId = Annotated[str, Field(pattern=r"^p[0-9]{5}$")]
 _InvestigationId = Annotated[str, Field(pattern=r"^i[0-9]{5}$")]
@@ -48,9 +50,9 @@ class Citation(_Record):
 
 class Candidate(_Record):
     file_id: _FileId
-    changed_behavior: _Text
-    trigger: _Text
-    consequence: _Text
+    changed_behavior: _FeedbackText
+    trigger: _FeedbackText
+    consequence: _FeedbackText
     proposed_impact: Impact
     citations: Annotated[tuple[Citation, ...], Field(max_length=12)]
     proposed_anchor_id: _EvidenceId | None

@@ -15,6 +15,7 @@ from loop_reviewer.review.drafts import DraftNotFound
 from loop_reviewer.review.generate import (
     ReviewerError,
     ReviewIdentityMismatch,
+    ReviewRetryChanged,
 )
 from loop_reviewer.review.model import DraftValidationError, ReviewAlreadyCompleted
 from loop_reviewer.review.publication import (
@@ -44,6 +45,7 @@ ERROR_TYPES = (
     InboxSettingsChanged,
     ScanSuperseded,
     ReviewIdentityMismatch,
+    ReviewRetryChanged,
     UnconfirmedPublication,
     PublicationBlocked,
     PublicationNotFound,
@@ -106,6 +108,6 @@ def api_error(error: Exception) -> ApiError:
         return ApiError(409, "publication_preflight", str(error))
     if isinstance(error, GitHubReadError | RepositoryDiscoveryError):
         return ApiError(502, "github_unavailable", str(error))
-    if isinstance(error, ReviewerError | PullRequestNotReviewable):
+    if isinstance(error, ReviewerError | PullRequestNotReviewable | ReviewRetryChanged):
         return ApiError(409, "review_unavailable", str(error))
     return ApiError(500, "local_state", "Could not read or update local review state.")

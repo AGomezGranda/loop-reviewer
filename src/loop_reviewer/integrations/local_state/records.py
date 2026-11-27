@@ -21,6 +21,7 @@ from loop_reviewer.review.model import (
     Severity,
     SummaryOrigin,
     require_report_association,
+    require_run_id,
 )
 from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
 from loop_reviewer.review.store import ReviewStoreError
@@ -28,6 +29,32 @@ from loop_reviewer.reviewer.full_review_contract import FullReviewResult
 
 _UNREADABLE = "The local review database is unreadable."
 _STATUSES = {"running", "draft_ready", "failed", "abandoned"}
+
+
+def attempt_fields(
+    run_id: object, status: object, failure: object, failure_kind: object
+) -> tuple[int, RunStatus, str | None, ReviewerFailureKind | None]:
+    try:
+        if type(run_id) is not int:
+            raise DraftValidationError
+        require_run_id(run_id)
+    except DraftValidationError:
+        raise ReviewStoreError(_UNREADABLE) from None
+    if (
+        not isinstance(status, str)
+        or status not in _STATUSES
+        or (failure is not None and not isinstance(failure, str))
+        or failure_kind not in (None, "setup", "input", "failed")
+        or (status == "failed") != (failure is not None)
+        or (status != "failed" and failure_kind is not None)
+    ):
+        raise ReviewStoreError(_UNREADABLE)
+    return (
+        run_id,
+        cast("RunStatus", status),
+        failure,
+        cast("ReviewerFailureKind | None", failure_kind),
+    )
 
 
 def completion_from_row(row: tuple[object, ...]) -> CompletedReview:
@@ -145,27 +172,21 @@ def run_from_row(row: tuple[object, ...]) -> ReviewRun:
         cost,
         report,
     ) = row
-    if (
-        type(run_id) is not int
-        or run_id < 1
-        or type(version) is not int
-        or version < 1
-        or not isinstance(status, str)
-        or status not in _STATUSES
-        or (failure is not None and not isinstance(failure, str))
-        or failure_kind not in (None, "setup", "input", "failed")
-    ):
+    id, saved_status, message, kind = attempt_fields(
+        run_id, status, failure, failure_kind
+    )
+    if type(version) is not int or version < 1:
         raise ReviewStoreError(_UNREADABLE)
     draft = None if draft_text is None else _draft_from_json(draft_text)
     try:
         return ReviewRun(
-            run_id,
+            id,
             selection_from_json(selection),
-            cast("RunStatus", status),
+            saved_status,
             draft,
-            failure,
+            message,
             version,
-            cast("ReviewerFailureKind | None", failure_kind),
+            kind,
             _generation_model(model),
             _generation_cost(cost),
             _report_from_json(report),

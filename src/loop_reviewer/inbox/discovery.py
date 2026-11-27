@@ -53,22 +53,8 @@ class RepositoryDiscovery(Protocol):
 
 
 class ConfigureInbox:
-    def __init__(self, discovery: RepositoryDiscovery, store: InboxStore) -> None:
+    def __init__(self, discovery: RepositoryDiscovery) -> None:
         self._discovery = discovery
-        self._store = store
-
-    def run(
-        self,
-        projects: tuple[JiraProjectKey, ...],
-        addresses: tuple[RepositoryAddress, ...],
-        *,
-        expected_version: int | None = None,
-    ) -> InboxSettings:
-        return self._store.replace_settings(
-            projects,
-            self.verify(projects, addresses),
-            expected_version=expected_version,
-        )
 
     def verify(
         self,
@@ -91,9 +77,6 @@ class ConfigureInbox:
                     "Use one authenticated account per host when setting up the inbox."
                 )
         return repositories
-
-    def settings(self) -> InboxSettings | None:
-        return self._store.settings()
 
     def verify_manual_edit(
         self, desired: InboxInputs, saved: InboxSettings | None

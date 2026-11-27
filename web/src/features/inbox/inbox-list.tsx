@@ -6,11 +6,11 @@ import { RepositoryPicker, repositoryKey } from "./repository-picker";
 
 export function InboxList({
 	report,
-	busy,
+	pending,
 	onAction,
 }: {
 	report: InboxReport;
-	busy: boolean;
+	pending: InboxIntent[];
 	onAction: (intent: InboxIntent) => void;
 }) {
 	const [key, setKey] = useState("");
@@ -63,7 +63,9 @@ export function InboxList({
 									row={row}
 									version={report.settingsVersion}
 									later={name === "later"}
-									busy={busy}
+									pending={pending.filter(
+										(intent) => intent.target.url === row.url,
+									)}
 									onAction={onAction}
 								/>
 							))}

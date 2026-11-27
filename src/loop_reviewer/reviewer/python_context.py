@@ -2,6 +2,7 @@
 
 import codecs
 import re
+from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from io import BytesIO
@@ -50,12 +51,31 @@ class ImportAlias:
 
 
 @dataclass(frozen=True)
+class EmptyReturn:
+    name: str
+    value: Literal["None", "[]", "()"]
+    line: int
+
+
+@dataclass(frozen=True)
+class IndexedCall:
+    name: str
+    module: str
+    imported_name: str
+    guarded: bool
+    end: int
+
+
+@dataclass(frozen=True)
 class PythonAnalysis:
     diagnostic: Diagnostic
     declarations: tuple[Declaration, ...] = ()
     calls: tuple[Call, ...] = ()
     imports: tuple[ImportAlias, ...] = ()
     limited: bool = False
+    module: str | None = None
+    empty_return: EmptyReturn | None = None
+    indexed_call: IndexedCall | None = None
 
 
 class PythonAnalyzer(Protocol):
@@ -94,7 +114,7 @@ def _span(declaration: Declaration, focus: int) -> tuple[int, int]:
 
 
 def _touched(
-    hunks: tuple[Hunk, ...], analysis: PythonAnalysis | None
+    hunks: tuple[Hunk, ...], analysis: PythonAnalysis | None, ambiguous: set[str]
 ) -> dict[str | int, SourceRange]:
     selected: dict[str | int, SourceRange] = {}
     if analysis is None:
@@ -110,7 +130,7 @@ def _touched(
             declaration = next(
                 (d for d in declarations if d.start_line <= line <= d.end_line), None
             )
-            if declaration is None:
+            if declaration is None or declaration.name in ambiguous:
                 module.append(line)
             elif declaration.name not in selected:
                 selected[declaration.name] = _range(blob, *_span(declaration, line))
@@ -134,8 +154,15 @@ def select_declarations(
     old_analysis: PythonAnalysis | None,
     new_analysis: PythonAnalysis | None,
 ) -> tuple[DeclarationSelection, ...]:
-    old = _touched(hunks, old_analysis)
-    new = _touched(hunks, new_analysis)
+    ambiguous = {
+        name
+        for analysis in (old_analysis, new_analysis)
+        if analysis is not None
+        for name, count in Counter(d.name for d in analysis.declarations).items()
+        if count > 1
+    }
+    old = _touched(hunks, old_analysis, ambiguous)
+    new = _touched(hunks, new_analysis, ambiguous)
     selected = []
     for key in dict.fromkeys((*old, *new)):
         base, head = old.get(key), new.get(key)

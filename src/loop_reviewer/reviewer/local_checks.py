@@ -232,6 +232,7 @@ def run_local_checks(
     work: LocalEvidenceWork,
     *,
     retrieve_context: bool = True,
+    eligible: Callable[[ChangedFile], bool] | None = None,
 ) -> tuple[list[CompileCheck], EvidenceIndex, list[CompileFinding], bool]:
     checks: list[CompileCheck] = []
     evidence = EvidenceIndex()
@@ -243,7 +244,7 @@ def run_local_checks(
         checks.append(check)
         if row.binary:
             check.reason = "binary"
-        elif not python_sides(row):
+        elif (eligible is not None and not eligible(row)) or not python_sides(row):
             check.reason = "unsupported_language"
         else:
             next_id += 1

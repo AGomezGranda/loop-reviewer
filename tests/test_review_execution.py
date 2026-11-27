@@ -12,7 +12,12 @@ from unittest.mock import patch
 
 import pytest
 
-from loop_reviewer.integrations.local_state.review_lock import LockedReviewExecution
+from loop_reviewer.integrations.local_state.review_lock import (
+    LockedReviewExecution,
+    review_lock_held,
+)
+from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
+from loop_reviewer.review.active import ActiveReviews
 from loop_reviewer.review.generate import ReviewerError
 from loop_reviewer.review.model import GeneratedReview, ReviewDraft, ReviewSelection
 from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
@@ -362,6 +367,39 @@ def test_concurrent_review_starts_invoke_reviewer_once(tmp_path: Path) -> None:
         _release(owner, release)
 
     assert sorted(marker.read_text().splitlines()) == ["7", "8"]
+
+
+def test_active_review_status_follows_comparison_lock(tmp_path: Path) -> None:
+    worker = _worker(tmp_path)
+    db = tmp_path / "state" / "reviews.sqlite3"
+    locks = tmp_path / "state" / "locks"
+    started, release, marker = (
+        tmp_path / name for name in ("started", "release", "marker")
+    )
+    store = SqliteReviewRunStore(db)
+    active = ActiveReviews(store, lambda key: review_lock_held(locks, key))
+    owner = _start(
+        worker, db, locks, "block-reviewer", 7, started, release, marker, "no"
+    )
+    try:
+        _wait_for(started)
+        (live,) = active.list()
+        assert live.status == "running"
+        assert (
+            ActiveReviews(store, lambda _: None).list()[0].status
+            == "status_unavailable"
+        )
+        owner.kill()
+        owner.wait(timeout=10)
+        assert active.list()[0].status == "running"
+        release.touch()
+        _wait_for_exit(int(started.read_text()))
+        (interrupted,) = active.list()
+        assert interrupted.status == "interrupted"
+        assert interrupted.run == live.run
+        assert store.unfinished_by_id(live.run.id) == live.run
+    finally:
+        _release(owner, release)
 
 
 @pytest.mark.parametrize(

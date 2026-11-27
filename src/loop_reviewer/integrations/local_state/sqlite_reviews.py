@@ -17,9 +17,11 @@ from loop_reviewer.integrations.local_state.publication_records import (
     publication_from_row,
 )
 from loop_reviewer.integrations.local_state.records import (
+    attempt_fields,
     completion_from_row,
     draft_json,
     run_from_row,
+    selection_from_json,
     selection_json,
 )
 from loop_reviewer.review.model import (
@@ -38,6 +40,7 @@ from loop_reviewer.review.model import (
     require_run_id,
 )
 from loop_reviewer.review.publication_model import (
+    PublicationError,
     PublicationId,
     PublicationPreview,
     PublicationRecord,
@@ -48,6 +51,7 @@ from loop_reviewer.review.store import (
     ReviewActivity,
     ReviewStoreError,
     UnconfirmedPublication,
+    UnfinishedReview,
 )
 
 _RUN_COLUMNS = "id, selection, status, draft, failure, draft_version, failure_kind, generation_model, estimated_cost_usd, reviewer_report"
@@ -84,6 +88,67 @@ class SqliteReviewRunStore:
     def completed(self, identity: ReviewIdentity) -> CompletedReview | None:
         with self._read() as connection:
             return self._completion_for_identity(connection, identity)
+
+    def unfinished(self) -> tuple[UnfinishedReview, ...]:
+        return self._unfinished(None)
+
+    def completed_run_id(self, identity: ReviewIdentity) -> int | None:
+        with self._read() as connection:
+            row = connection.execute(
+                "SELECT run_id FROM review_completions WHERE identity_key = ?",
+                (identity_key(identity),),
+            ).fetchone()
+            if row is None:
+                return None
+            run_id = row[0]
+            if type(run_id) is not int or run_id < 1:
+                raise ReviewStoreError(_UNREADABLE)
+            return run_id
+
+    def unfinished_by_id(self, run_id: int) -> UnfinishedReview | None:
+        _require_supported_run_id(run_id)
+        rows = self._unfinished(run_id)
+        return rows[0] if rows else None
+
+    def _unfinished(self, run_id: int | None) -> tuple[UnfinishedReview, ...]:
+        result: list[UnfinishedReview] = []
+        with self._read() as connection:
+            query = (
+                "SELECT id, selection, status, failure, failure_kind FROM review_runs "
+                "WHERE is_current = 1"
+            )
+            parameters: tuple[int, ...] = ()
+            if run_id is not None:
+                query += " AND id = ?"
+                parameters = (run_id,)
+            for id, raw_selection, status, failure, kind in connection.execute(
+                query + " ORDER BY id DESC", parameters
+            ):
+                selection = selection_from_json(raw_selection)
+                key = identity_key(selection.identity)
+                completed, publication = connection.execute(
+                    "SELECT EXISTS (SELECT 1 FROM review_completions WHERE identity_key = ?), "
+                    "(SELECT id FROM review_publications WHERE identity_key = ? "
+                    "AND status = 'unconfirmed')",
+                    (key, key),
+                ).fetchone()
+                if completed:
+                    continue
+                run_id, status, failure, kind = attempt_fields(
+                    id, status, failure, kind
+                )
+                try:
+                    publication_id = (
+                        None if publication is None else PublicationId(publication)
+                    )
+                except AttributeError, TypeError, PublicationError:
+                    raise ReviewStoreError(_UNREADABLE) from None
+                result.append(
+                    UnfinishedReview(
+                        run_id, selection, status, failure, kind, publication_id
+                    )
+                )
+        return tuple(result)
 
     def completions(
         self, before_run_id: int | None, limit: int

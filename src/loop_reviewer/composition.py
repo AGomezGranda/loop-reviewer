@@ -20,14 +20,19 @@ from loop_reviewer.integrations.github_discussion import GhDiscussionReader
 from loop_reviewer.integrations.github_publication import open_gh_publication
 from loop_reviewer.integrations.local_state.inbox_watch import InboxWatch
 from loop_reviewer.integrations.local_state.publication_lock import LockedPublication
-from loop_reviewer.integrations.local_state.review_lock import LockedReviewExecution
+from loop_reviewer.integrations.local_state.review_lock import (
+    LockedReviewExecution,
+    review_lock_held,
+)
 from loop_reviewer.integrations.local_state.sqlite_inbox import SqliteInboxStore
 from loop_reviewer.integrations.local_state.sqlite_reviews import (
     SqliteReviewRunStore,
 )
 from loop_reviewer.integrations.local_state.toml_settings import TomlSettings
+from loop_reviewer.review.active import ActiveReviews
 from loop_reviewer.review.drafts import EditReviewDraft
 from loop_reviewer.review.generate import (
+    RetryTarget,
     Reviewer,
     ReviewerError,
     ReviewOutcome,
@@ -104,7 +109,7 @@ class Workflows:
         store = SqliteInboxStore(self._database)
         self._config = TomlSettings(
             config_path,
-            ConfigureInbox(GhRepositoryDiscovery(self._environment), store),
+            ConfigureInbox(GhRepositoryDiscovery(self._environment)),
             store,
         )
 
@@ -153,6 +158,8 @@ class Workflows:
         *,
         retry: bool = False,
         expected_identity: ReviewIdentity | None = None,
+        observe_selection: Callable[[ReviewSelection], None] | None = None,
+        retry_target: RetryTarget | None = None,
     ) -> ReviewOutcome:
         environment = self._environment
         with open_gh_environment(
@@ -189,7 +196,13 @@ class Workflows:
                 LockedReviewExecution(self._state / "locks", reviewer_factory),
                 select_current=self.select,
             )
-            return workflow.run(ref, retry=retry, expected_identity=expected_identity)
+            return workflow.run(
+                ref,
+                retry=retry,
+                expected_identity=expected_identity,
+                observe_selection=observe_selection,
+                retry_target=retry_target,
+            )
 
     def edit_review_draft(self) -> EditReviewDraft:
         return EditReviewDraft(SqliteReviewRunStore(self._database))
@@ -197,6 +210,12 @@ class Workflows:
     def review_history(self) -> ReviewHistory:
         store = SqliteReviewRunStore(self._database)
         return ReviewHistory(store, store)
+
+    def active_reviews(self) -> ActiveReviews:
+        return ActiveReviews(
+            SqliteReviewRunStore(self._database),
+            lambda key: review_lock_held(self._state / "locks", key),
+        )
 
     def prepare_publication(self) -> PreparePublication:
         return PreparePublication(

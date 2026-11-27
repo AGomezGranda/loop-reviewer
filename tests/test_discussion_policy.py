@@ -15,6 +15,7 @@ from loop_reviewer.reviewer.discussion_policy import (
     map_discussion,
 )
 from loop_reviewer.reviewer.integrations.git_hunks import decode_hunks
+from loop_reviewer.reviewer.integrations.python_analyzer import CpythonAnalyzer
 from loop_reviewer.reviewer.inventory import RevisionSide
 from loop_reviewer.reviewer.inventory_contract import ChangedFile
 from loop_reviewer.reviewer.local_evidence import EvidenceIndex, LocalEvidenceWork
@@ -29,7 +30,6 @@ from tests.test_semantic_batch import (
     BASE,
     HEAD,
     ScriptedModel,
-    WitnessAnalyzer,
     WitnessSource,
 )
 
@@ -38,7 +38,7 @@ from tests.test_semantic_batch import (
 def verified() -> BatchOutcome:
     source = WitnessSource()
     index = EvidenceIndex()
-    work = LocalEvidenceWork(source, WitnessAnalyzer(), PINS, lambda: 0, 120)
+    work = LocalEvidenceWork(source, CpythonAnalyzer(), PINS, lambda: 0, 120)
     bundle = build_targeted_bundle(PINS, source.rows, work, index, 8192)
     return run_semantic_batch(
         bundle,
@@ -47,6 +47,7 @@ def verified() -> BatchOutcome:
         SpendLedger(100, lambda: 0),
         SemanticLimits(120),
         lambda: 0,
+        analyzer=CpythonAnalyzer(),
         evidence=index,
     )
 
@@ -149,7 +150,7 @@ def test_linking_requires_unambiguous_open_root_and_witness(
     context = map_discussion(
         snapshot,
         source.rows,
-        LocalEvidenceWork(source, WitnessAnalyzer(), PINS, lambda: 0, 120),
+        LocalEvidenceWork(source, CpythonAnalyzer(), PINS, lambda: 0, 120),
     )
     assert bool(context.by_file) is references and not context.omissions
     disposition = link_verified_threads(verified.findings, context, verified.evidence)
@@ -209,7 +210,7 @@ def test_stale_quote_maps_only_when_unique_on_recorded_rename_pair(
     context = map_discussion(
         snapshot,
         source.rows,
-        LocalEvidenceWork(source, WitnessAnalyzer(), PINS, lambda: 0, 120),
+        LocalEvidenceWork(source, CpythonAnalyzer(), PINS, lambda: 0, 120),
     )
     assert not context.omissions
     if repeated:
@@ -245,7 +246,7 @@ def test_unanchored_reference_requires_explicit_path_and_exact_unique_hunk() -> 
     context = map_discussion(
         snapshot,
         source.rows,
-        LocalEvidenceWork(source, WitnessAnalyzer(), PINS, lambda: 0, 120),
+        LocalEvidenceWork(source, CpythonAnalyzer(), PINS, lambda: 0, 120),
     )
     assert [
         (item.item_id, item.kind, item.can_link)
@@ -262,7 +263,7 @@ def test_mapping_uses_smallest_thread_id_and_never_assigns_one_thread_twice(
     context = map_discussion(
         snapshot,
         source.rows,
-        LocalEvidenceWork(source, WitnessAnalyzer(), PINS, lambda: 0, 120),
+        LocalEvidenceWork(source, CpythonAnalyzer(), PINS, lambda: 0, 120),
     )
     (finding,) = verified.findings
     disposition = link_verified_threads((finding,), context, verified.evidence)
@@ -270,7 +271,7 @@ def test_mapping_uses_smallest_thread_id_and_never_assigns_one_thread_twice(
     single = map_discussion(
         known_snapshot(),
         source.rows,
-        LocalEvidenceWork(source, WitnessAnalyzer(), PINS, lambda: 0, 120),
+        LocalEvidenceWork(source, CpythonAnalyzer(), PINS, lambda: 0, 120),
     )
     second = replace(finding, id="c00402")
     disposition = link_verified_threads((finding, second), single, verified.evidence)
@@ -295,7 +296,7 @@ def test_mapping_deadline_is_local_and_uses_remaining_timeout() -> None:
             )
 
     source = SlowSource()
-    work = LocalEvidenceWork(source, WitnessAnalyzer(), PINS, lambda: source.time, 120)
+    work = LocalEvidenceWork(source, CpythonAnalyzer(), PINS, lambda: source.time, 120)
     context = map_discussion(known_snapshot(), source.rows, work)
     assert not context.by_file
     assert [(item.scope, item.code) for item in context.omissions] == [

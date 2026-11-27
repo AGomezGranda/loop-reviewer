@@ -24,11 +24,14 @@ from loop_reviewer.inbox.model import (
     RepositoryAddress,
     WatchedRepository,
 )
+from loop_reviewer.inbox.polling import ScanCycle
 from loop_reviewer.integrations.local_state.inbox_watch import InboxWatch
+from loop_reviewer.integrations.local_state.review_lock import LockedReviewExecution
 from loop_reviewer.integrations.local_state.sqlite_inbox import SqliteInboxStore
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
 from loop_reviewer.local_http.app import create_app
 from loop_reviewer.local_http.serve import BrowserServer
+from loop_reviewer.local_http.watch import BrowserWatch
 from loop_reviewer.review.history import ReviewHistory
 from loop_reviewer.review.hosted_report import project_report
 from loop_reviewer.review.model import (
@@ -38,7 +41,12 @@ from loop_reviewer.review.model import (
     ReviewSelection,
 )
 from loop_reviewer.review.publication_model import PublicationPreview
-from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
+from loop_reviewer.review.pull_request import (
+    PullRequest,
+    PullRequestRef,
+    ReviewedRevision,
+)
+from loop_reviewer.review.selection import GitHubReadError
 from loop_reviewer.review.store import ReviewStoreError
 
 from .support.browser_review import (
@@ -50,6 +58,14 @@ from .support.hosted_report import offline_report
 
 _ORIGIN = "http://127.0.0.1:43210"
 _HEADERS = {"Authorization": "Bearer test-capability", "Origin": _ORIGIN}
+_REVIEW_URL = "https://github.com/org/repo/pull/1"
+_SAVED_SELECTION = ReviewSelection(
+    PullRequestRef("github.com", "org", "repo", 1, 42),
+    "reviewer",
+    "teammate",
+    ReviewedRevision("main", "a" * 40, "b" * 40, "c" * 40),
+)
+_GENERATED = GeneratedReview(ReviewDraft("comment", "Ready", ()), "fixture/model", None)
 
 
 pytestmark = pytest.mark.anyio
@@ -71,9 +87,10 @@ def _app(
         scan_inbox=watcher.scan_now,
         configure_inbox=workflows.configure_inbox(),
         inbox_actions=workflows.inbox_actions(),
-        review_pull_request=lambda ref, retry: workflows.review(ref, retry=retry),
+        review_pull_request=workflows.review,
         drafts=workflows.edit_review_draft(),
         review_history=workflows.review_history(),
+        active_reviews=workflows.active_reviews(),
         prepare=workflows.prepare_publication(),
         publish=workflows.publish_review(),
         join_watch=watcher.join,
@@ -88,8 +105,12 @@ async def client(tmp_path: Path) -> AsyncGenerator[httpx.AsyncClient]:
         tmp_path / "loop-reviewer", {}, config_path=tmp_path / "config.toml"
     )
     watcher = workflows.inbox_watch(monotonic=lambda: 0)
-    transport = httpx.ASGITransport(app=_app(workflows, watcher))
-    async with httpx.AsyncClient(transport=transport, base_url=_ORIGIN) as session:
+    app = _app(workflows, watcher)
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=transport, base_url=_ORIGIN) as session,
+    ):
         yield session
 
 
@@ -124,6 +145,259 @@ async def test_saved_edit_can_be_returned_during_publication_history_failure(
     assert (await client.get(url, headers=_HEADERS)).json() == response.json()
 
 
+async def test_background_launches_accept_two_and_queue_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflows = Workflows(tmp_path / "state", {}, config_path=tmp_path / "config.toml")
+    app = _app(workflows, workflows.inbox_watch(monotonic=lambda: 0))
+    entered = {number: Event() for number in (1, 2, 3)}
+    release = {number: Event() for number in entered}
+    calls: list[int] = []
+
+    class GateReviewer:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def review(self, selection: ReviewSelection) -> GeneratedReview:
+            number = selection.ref.number
+            calls.append(number)
+            entered[number].set()
+            assert release[number].wait(10)
+            return GeneratedReview(
+                ReviewDraft("comment", "Ready", ()), "fixture/model", None
+            )
+
+    monkeypatch.setattr(composition, "open_gh_environment", fake_gh_environment)
+    monkeypatch.setattr(composition, "GhPullRequestReader", FakeReader)
+    monkeypatch.setattr(composition, "HostedReportReviewer", GateReviewer)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url=_ORIGIN
+    ) as client:
+
+        async def launch(number: int) -> httpx.Response:
+            return await asyncio.wait_for(
+                client.post(
+                    "/api/v1/reviews/launches",
+                    headers=_HEADERS,
+                    json={"url": f"https://github.com/org/repo/pull/{number}"},
+                ),
+                2,
+            )
+
+        async with app.router.lifespan_context(app):
+            try:
+                first = await launch(1)
+                assert first.status_code == 202
+                assert await asyncio.to_thread(entered[1].wait, 2)
+                assert (await launch(2)).status_code == 202
+                assert await asyncio.to_thread(entered[2].wait, 2)
+                third = await launch(3)
+                assert third.status_code == 202
+                assert (await launch(3)).json() == third.json()
+                rows = (await client.get("/api/v1/reviews", headers=_HEADERS)).json()
+                assert sorted(row["status"] for row in rows) == [
+                    "queued",
+                    "running",
+                    "running",
+                ]
+                assert not entered[3].is_set()
+                for number in range(4, 35):
+                    assert (await launch(number)).status_code == 202
+                full = await launch(35)
+                assert full.status_code == 409
+                assert full.json()["code"] == "review_queue_full"
+                release[1].set()
+                assert await asyncio.to_thread(entered[3].wait, 2)
+                assert not release[2].is_set()
+            finally:
+                app.state.stop_launches()
+                for event in release.values():
+                    event.set()
+    assert calls == [1, 2, 3]
+    restarted = _app(workflows, workflows.inbox_watch(monotonic=lambda: 0))
+    async with (
+        restarted.router.lifespan_context(restarted),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=restarted), base_url=_ORIGIN
+        ) as client,
+    ):
+        rows = (await client.get("/api/v1/reviews", headers=_HEADERS)).json()
+        assert len(rows) == 3
+        assert all(row["status"] == "draft_ready" for row in rows)
+
+
+class _BackgroundReviewer:
+    def __init__(self, *_args: object) -> None:
+        pass
+
+    def review(self, selection: ReviewSelection) -> GeneratedReview:
+        return _GENERATED
+
+
+@pytest.mark.parametrize(
+    "case", ["stale", "unverified", "github", "inbox", "completed", "competing"]
+)
+async def test_active_list_reports_background_outcomes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    state = tmp_path / "state"
+    workflows = Workflows(state, {}, config_path=tmp_path / "config.toml")
+    app = _app(workflows, workflows.inbox_watch(monotonic=lambda: 0))
+    store = SqliteReviewRunStore(state / "reviews.sqlite3")
+    saved = None
+
+    class Reader(FakeReader):
+        @override
+        def read_pull_request(self, ref: PullRequestRef) -> tuple[str, PullRequest]:
+            if case == "github":
+                raise GitHubReadError("Could not read GitHub.")
+            return super().read_pull_request(ref)
+
+    def verify(_workflows: Workflows, _ref: PullRequestRef) -> ReviewSelection:
+        if case == "unverified":
+            raise GitHubReadError("Could not verify GitHub.")
+        return replace(
+            _SAVED_SELECTION, revision=replace(_SAVED_SELECTION.revision, head="d" * 40)
+        )
+
+    monkeypatch.setattr(composition, "open_gh_environment", fake_gh_environment)
+    monkeypatch.setattr(composition, "GhPullRequestReader", Reader)
+    monkeypatch.setattr(composition, "HostedReportReviewer", _BackgroundReviewer)
+    if case in ("stale", "unverified"):
+        monkeypatch.setattr(Workflows, "select", verify)
+    if case == "completed":
+        saved = store.start(_SAVED_SELECTION, replaces=None).finish(_GENERATED)
+        store.save(saved)
+        store.complete(saved.complete_locally())
+    if case == "competing":
+        saved = store.start(_SAVED_SELECTION, replaces=None)
+    competing = LockedReviewExecution(state / "locks", _BackgroundReviewer)
+    with (
+        competing.acquire(_SAVED_SELECTION.key)
+        if case == "competing"
+        else nullcontext()
+    ):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=_ORIGIN
+        ) as client:
+            async with app.router.lifespan_context(app):
+                if case == "inbox":
+                    response = await client.post(
+                        "/api/v1/inbox/launch",
+                        headers=_HEADERS,
+                        json={
+                            "url": _REVIEW_URL,
+                            "settingsVersion": "1",
+                            "identity": {
+                                "host": "github.com",
+                                "repositoryId": "42",
+                                "number": "1",
+                                "account": "reviewer",
+                            },
+                        },
+                    )
+                else:
+                    response = await client.post(
+                        "/api/v1/reviews/launches",
+                        headers=_HEADERS,
+                        json={"url": _REVIEW_URL},
+                    )
+                assert response.status_code == 202
+            (row,) = (await client.get("/api/v1/reviews", headers=_HEADERS)).json()
+    if case in ("stale", "unverified"):
+        assert row["kind"] == "saved"
+        assert row["status"] == "draft_ready"
+        assert row["changes"] == (["head"] if case == "stale" else "unavailable")
+    elif case == "competing":
+        assert saved is not None and row["runId"] == str(saved.id)
+        assert row["status"] == "running"
+    elif case == "completed":
+        assert saved is not None and row["completedRunId"] == str(saved.id)
+        assert row["kind"] == "launch" and row["status"] == "completed"
+    else:
+        assert row["kind"] == "launch" and row["status"] == "failed"
+        assert row["error"]["code"] == (
+            "github_unavailable" if case == "github" else "inbox_changed"
+        )
+
+
+@pytest.mark.parametrize("changed", ["comparison", "replacement", "same"])
+async def test_background_retry_rechecks_the_saved_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    state = tmp_path / "state"
+    workflows = Workflows(state, {}, config_path=tmp_path / "config.toml")
+    app = _app(workflows, workflows.inbox_watch(monotonic=lambda: 0))
+    store = SqliteReviewRunStore(state / "reviews.sqlite3")
+    original = store.start(_SAVED_SELECTION, replaces=None)
+    store.save(original.fail("Original failure", "failed"))
+    entered, release = Event(), Event()
+
+    class Reader(FakeReader):
+        @override
+        def read_pull_request(self, ref: PullRequestRef) -> tuple[str, PullRequest]:
+            entered.set()
+            assert release.wait(5)
+            account, pr = super().read_pull_request(ref)
+            return account, replace(
+                pr, head="d" * 40
+            ) if changed == "comparison" else pr
+
+        @override
+        def read_revision(self, _pull_request: PullRequest) -> ReviewedRevision:
+            return replace(
+                super().read_revision(_pull_request), head=_pull_request.head
+            )
+
+    monkeypatch.setattr(composition, "open_gh_environment", fake_gh_environment)
+    monkeypatch.setattr(composition, "GhPullRequestReader", Reader)
+    monkeypatch.setattr(composition, "HostedReportReviewer", _BackgroundReviewer)
+    replacement_id = original.id
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url=_ORIGIN
+    ) as client:
+        retry_url = f"/api/v1/reviews/{original.id}/retry"
+        async with app.router.lifespan_context(app):
+            try:
+                accepted = await client.post(retry_url, headers=_HEADERS)
+                assert accepted.status_code == 202
+                assert await asyncio.to_thread(entered.wait, 2)
+                duplicate = await client.post(retry_url, headers=_HEADERS)
+                assert duplicate.json() == accepted.json()
+                (pending,) = (
+                    await client.get("/api/v1/reviews", headers=_HEADERS)
+                ).json()
+                assert pending["status"] == "running"
+                if changed == "replacement":
+                    replacement = store.start(
+                        _SAVED_SELECTION, replaces=original.id
+                    ).finish(_GENERATED)
+                    store.save(replacement)
+                    replacement_id = replacement.id
+            finally:
+                release.set()
+        rows = (await client.get("/api/v1/reviews", headers=_HEADERS)).json()
+        if changed == "same":
+            (saved,) = rows
+            assert saved["runId"] != str(original.id)
+        else:
+            failure, saved = rows
+            assert failure["kind"] == "launch"
+            assert failure["error"]["code"] == "review_unavailable"
+            assert "attempt or its comparison changed" in failure["error"]["message"]
+            assert saved["runId"] == str(replacement_id)
+        assert saved["status"] == (
+            "failed" if changed == "comparison" else "draft_ready"
+        )
+        if changed != "comparison":
+            stale_retry = await client.post(retry_url, headers=_HEADERS)
+            assert stale_retry.status_code == 409
+            assert (
+                stale_retry.json()["message"]
+                == "This attempt is no longer available to retry."
+            )
+
+
 @pytest.mark.parametrize("action", ["confirm", "recover", "retry"])
 async def test_publication_command_maps_unknown_preview_to_not_found(
     client: httpx.AsyncClient, action: str
@@ -137,7 +411,7 @@ async def test_publication_command_maps_unknown_preview_to_not_found(
     assert response.json()["code"] == "not_found"
 
 
-@pytest.mark.parametrize("action", ["scan", "confirm", "recover"])
+@pytest.mark.parametrize("action", ["scan", "confirm", "recover", "review-retry"])
 @pytest.mark.parametrize("media_type", ["application/json", "text/plain", None])
 async def test_bodyless_mutation_rejects_any_body(
     client: httpx.AsyncClient, action: str, media_type: str | None
@@ -145,6 +419,8 @@ async def test_bodyless_mutation_rejects_any_body(
     route = (
         "/inbox/scan"
         if action == "scan"
+        else "/reviews/1/retry"
+        if action == "review-retry"
         else f"/publications/66206015-5d37-4d21-8bf2-10d48d043413/{action}"
     )
     headers = _HEADERS | ({"Content-Type": media_type} if media_type else {})
@@ -172,6 +448,30 @@ async def test_requires_capability_host_and_write_origin(
     assert valid.json() == {"kind": "unconfigured"}
     assert valid.headers["cache-control"] == "no-store"
     assert valid.headers["referrer-policy"] == "no-referrer"
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("GET", "/reviews"),
+        ("POST", "/reviews/launches"),
+        ("POST", "/inbox/launch"),
+        ("POST", "/reviews/1/retry"),
+    ],
+)
+async def test_background_routes_enforce_local_session(
+    client: httpx.AsyncClient, method: str, route: str
+) -> None:
+    url = f"/api/v1{route}"
+    assert (await client.request(method, url)).status_code == 401
+    assert (
+        await client.request(method, url, headers=_HEADERS | {"Host": "bad.invalid"})
+    ).status_code == 403
+    if method == "POST":
+        denied = await client.request(
+            method, url, headers=_HEADERS | {"Origin": "https://bad.invalid"}
+        )
+        assert denied.status_code == 403
 
 
 @pytest.mark.parametrize("priced", [True, False], ids=["priced", "legacy"])
@@ -239,8 +539,12 @@ async def test_invalid_patch_returns_typed_error(
     assert "private data" not in response.text
 
 
+@pytest.mark.parametrize("repair", [False, True], ids=["first-save", "repair"])
 async def test_setup_applies_one_project_to_multiple_repositories(
-    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    repair: bool,
 ) -> None:
     urls = ["https://github.com/org/first", "https://github.com/org/second"]
     account = "alice"
@@ -273,6 +577,9 @@ async def test_setup_applies_one_project_to_multiple_repositories(
     monkeypatch.setattr(composition.GhRepositoryDiscovery, "verify", verify)
     monkeypatch.setattr(composition.GhRepositoryDiscovery, "list_open", discover)
     url = "/api/v1/inbox/configuration"
+    path = tmp_path / "config.toml"
+    if repair:
+        path.write_text('[inbox]\njira_project_key = "OLD"\nrepositories = []\n')
     empty = await client.get(url, headers=_HEADERS)
     assert empty.json() == {
         "settingsVersion": None,
@@ -295,7 +602,6 @@ async def test_setup_applies_one_project_to_multiple_repositories(
         "repositoryUrls": urls,
         "configRevision": settings["configRevision"],
     }
-    path = tmp_path / "config.toml"
     assert loads(path.read_text()) == {
         "inbox": {"jira_project_key": "ABC", "repositories": urls},
     }
@@ -655,21 +961,57 @@ async def test_concurrent_opens_share_review_lock(
     ],
     ids=["non-json-media", "malformed-json", "escaped-body-limit"],
 )
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("PATCH", "/drafts/1"),
+        ("POST", "/reviews/launches"),
+        ("POST", "/inbox/launch"),
+    ],
+)
 async def test_mutation_envelope_before_parsing(
     client: httpx.AsyncClient,
     content: bytes,
     content_type: str,
     expected_status: int,
     code: str,
+    method: str,
+    route: str,
 ) -> None:
-    result = await client.patch(
-        "/api/v1/drafts/1",
+    result = await client.request(
+        method,
+        f"/api/v1{route}",
         headers={**_HEADERS, "Content-Type": content_type},
         content=content,
     )
     assert result.status_code == expected_status
     assert result.json()["code"] == code
     assert result.headers["cache-control"] == "no-store"
+
+
+async def test_reconnect_restarts_polling_before_failed_stream_closes() -> None:
+    calls = 0
+
+    def tick() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("Transient watch error")
+
+    watch = BrowserWatch(
+        nullcontext, tick, lambda: ScanCycle("test", calls, "complete")
+    )
+    first, second = watch.events(), watch.events()
+    try:
+        assert '"ready"' in await anext(first)
+        await asyncio.wait_for(watch.drain(), 1)
+        assert '"ready"' in await anext(second)
+        assert await anext(first, None) is None
+        assert '"scan-finished"' in await asyncio.wait_for(anext(second), 1)
+    finally:
+        await first.aclose()
+        await second.aclose()
+        await watch.drain()
 
 
 def test_last_loopback_stream_disconnect_releases_browser_membership(

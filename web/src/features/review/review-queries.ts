@@ -4,7 +4,6 @@ import type { components } from "@/api/schema";
 
 type Schemas = components["schemas"];
 export type Draft = Schemas["DraftResponse"];
-export type OpenOutcome = Awaited<ReturnType<typeof openReview>>;
 export type Edit =
 	| Schemas["EditSummary"]
 	| Schemas["EditFinding"]
@@ -31,5 +30,5 @@ export const finishDraft = (runId: string, version: string) =>
 export const copyDraft = (runId: string) =>
 	request("get", "/api/v1/drafts/{runId}/copy", { params: { runId } });
 
-export const openReview = (url: string, retry: boolean) =>
-	request("post", "/api/v1/reviews/open", { body: { url, retry } });
+export const launchReview = (url: string) =>
+	request("post", "/api/v1/reviews/launches", { body: { url } });

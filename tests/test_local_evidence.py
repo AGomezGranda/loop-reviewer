@@ -5,15 +5,21 @@ import pytest
 
 from loop_reviewer.reviewer.inventory import RevisionSide
 from loop_reviewer.reviewer.local_check_contract import SourceEvidence
+from loop_reviewer.reviewer.local_checks import review_local_checks
 from loop_reviewer.reviewer.local_evidence import (
     EvidenceIndex,
     LocalEvidenceWork,
     collect_python_context,
     python_sides,
 )
-from loop_reviewer.reviewer.pinned_source import PinnedTextBlob
+from loop_reviewer.reviewer.pinned_source import PinnedTextBlob, SearchPaths
 from loop_reviewer.reviewer.python_context import PythonAnalysis
-from tests.test_local_checks import PINS, SharedCallerAnalyzer, SharedCallerSource
+from tests.test_local_checks import (
+    PINS,
+    REQUEST,
+    SharedCallerAnalyzer,
+    SharedCallerSource,
+)
 
 
 def test_context_selections_reuse_the_unchanged_caller_evidence_id() -> None:
@@ -78,4 +84,49 @@ def test_context_does_not_index_spoofed_identity(identity: str) -> None:
     assert all(
         isinstance(e, SourceEvidence) and e.range.path != "caller.py"
         for e in evidence.entries
+    )
+
+
+def test_optional_context_cannot_reuse_rejected_changed_blob() -> None:
+    class InconsistentSource(SharedCallerSource):
+        @override
+        def read_text_blob(
+            self,
+            side: RevisionSide,
+            path: str,
+            *,
+            max_bytes: int,
+            timeout_seconds: float,
+        ) -> PinnedTextBlob:
+            blob = super().read_text_blob(
+                side, path, max_bytes=max_bytes, timeout_seconds=timeout_seconds
+            )
+            return (
+                replace(blob, blob_id="e" * 40)
+                if (side, path) == ("head", "b.py")
+                else blob
+            )
+
+        @override
+        def search(
+            self,
+            side: RevisionSide,
+            literal: str,
+            *,
+            max_paths: int,
+            max_bytes: int,
+            timeout_seconds: float,
+            regular_text: bool = False,
+        ) -> SearchPaths:
+            return SearchPaths(("b.py", "caller.py"), False, 50)
+
+    report = review_local_checks(
+        REQUEST, InconsistentSource().open, SharedCallerAnalyzer(), lambda: 0
+    ).root
+    assert report.status == "partial"
+    assert [row.reason for row in report.file_coverage] == [None, "missing_evidence"]
+    assert all(
+        item.range.blob_id != "e" * 40
+        for item in report.evidence_index
+        if isinstance(item, SourceEvidence)
     )

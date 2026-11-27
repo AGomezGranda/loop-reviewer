@@ -12,10 +12,11 @@ type Body<O> = O extends {
 }
 	? B
 	: never;
-type Result<O> = O extends {
-	responses: { 200: { content: { "application/json": infer R } } };
-}
-	? R
+type JsonResponse<R> = R extends { content: { "application/json": infer Body } }
+	? Body
+	: never;
+type Result<O> = O extends { responses: infer Responses }
+	? JsonResponse<Responses[keyof Responses & (200 | 202)]>
 	: never;
 type PathParams<O> = O extends { parameters: { path: infer P } } ? P : never;
 type QueryParams<O> = O extends { parameters: { query?: infer Q } }

@@ -207,9 +207,14 @@ def render_review_outcome(outcome: ReviewOutcome, ref: PullRequestRef) -> int:
         return 0
 
     if isinstance(outcome, FailedReview):
+        # Earlier versions persisted a missing pin as an input failure.
+        stale_git_fetch = outcome.message == (
+            "The selected comparison is no longer available from GitHub. "
+            "Select the pull request again with open."
+        )
         guidance = (
             f"When a supported comparison is available, run loop-reviewer review {url}."
-            if outcome.kind == "input"
+            if outcome.kind == "input" and not stale_git_fetch
             else f"Fix the problem, then run loop-reviewer review --retry {url}."
         )
         print(f"loop-reviewer: error: {outcome.message} {guidance}", file=sys.stderr)

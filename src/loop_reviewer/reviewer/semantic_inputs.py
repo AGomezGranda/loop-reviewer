@@ -488,7 +488,13 @@ def build_targeted_bundle(
             omissions[target.file.id] = target.context_gap
         metadata.append(target.file.projection())
         selected.append(target.file.id)
-        new = [item for item in target.excerpts if item.source.id not in packed]
+        new = list(
+            {
+                item.source.id: item
+                for item in target.excerpts
+                if item.source.id not in packed
+            }.values()
+        )
         records.extend(item.source.model_dump() for item in new)
         if _bytes(serialize()) > limit:
             # Pack the paired changed declarations or hunks before optional context.

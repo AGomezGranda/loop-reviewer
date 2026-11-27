@@ -82,7 +82,8 @@ def project_report(report: FullReviewResult) -> ReviewDraft:
     original = report.root
     if original.status == "failed":
         raise ReviewerError(
-            "The reviewer could not analyze the pinned comparison.", "failed"
+            f"The reviewer could not analyze the pinned comparison. {original.error.message}",
+            "failed",
         )
     try:
         return ReviewDraft(
@@ -113,6 +114,6 @@ def _right_location(anchor: SourceLocation | None) -> FindingLocation | None:
         path = canonical_path(anchor.path).decode("utf-8")
     except UnicodeDecodeError:
         return None
-    if any(category(char) == "Cc" for char in path):
+    if not path.strip() or any(category(char) == "Cc" for char in path):
         return None
     return FindingLocation(path, anchor.start_line)

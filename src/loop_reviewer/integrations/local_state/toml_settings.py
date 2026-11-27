@@ -21,7 +21,7 @@ from loop_reviewer.inbox.configuration import (
 )
 from loop_reviewer.inbox.discovery import ConfigureInbox
 from loop_reviewer.inbox.model import InboxSettings, JiraProjectKey, RepositoryAddress
-from loop_reviewer.inbox.store import InboxSettingsChanged, InboxStore
+from loop_reviewer.inbox.store import InboxSettingsChanged, InboxStore, InboxStoreError
 from loop_reviewer.integrations.local_state.posix_lock import (
     LocalLockError,
     private_lock,
@@ -37,7 +37,7 @@ class TomlSettings:
     def settings(self) -> LocalSettings:
         raw, doc = self._read()
         saved = self._store.settings()
-        return self._settings(raw, doc, saved)
+        return self._settings(raw, self._setup_inputs(doc), saved)
 
     def run(
         self,
@@ -50,7 +50,9 @@ class TomlSettings:
         with self._lock():
             raw, doc = self._read()
             saved = self._store.settings()
-            current = self._settings(raw, doc, saved)
+            existed = bool(raw) or self._path.exists()
+            previous = self._setup_inputs(doc)
+            current = self._settings(raw, previous, saved)
             version = current.version or 0
             if (
                 expected_version is not None
@@ -63,11 +65,11 @@ class TomlSettings:
             repositories = (
                 self._inbox.verify(projects, addresses)
                 if verify_inbox_on_save((projects, addresses), current)
+                or (previous is None and doc.get("inbox") is not None)
                 else ()
             )
             if repositories:
                 canonical = tuple(repo.address for repo in repositories)
-                previous = self._inputs(doc)
                 inbox = _editable_table(doc, "inbox")
                 if previous is None or previous[0] != projects:
                     inbox["jira_project_key"] = projects[0].value
@@ -83,10 +85,15 @@ class TomlSettings:
             else:
                 self._check_unchanged(raw)
             if repositories:
-                saved = self._store.replace_settings(
-                    projects, repositories, expected_version=version
-                )
-            return self._settings(updated, doc, saved)
+                try:
+                    saved = self._store.replace_settings(
+                        projects, repositories, expected_version=version
+                    )
+                except InboxStoreError, InboxSettingsChanged:
+                    if updated != raw:
+                        self._restore(updated, raw, existed=existed)
+                    raise
+            return self._settings(updated, self._inputs(doc), saved)
 
     def sync_inbox(self) -> None:
         # Read-only operations on a legacy inbox do not create a configuration directory.
@@ -110,15 +117,21 @@ class TomlSettings:
             )
 
     def _settings(
-        self, raw: bytes, doc: TOMLDocument, saved: InboxSettings | None
+        self, raw: bytes, inputs: InboxInputs | None, saved: InboxSettings | None
     ) -> LocalSettings:
-        projects, addresses = self._inputs(doc) or saved_inbox_inputs(saved)
+        projects, addresses = inputs or saved_inbox_inputs(saved)
         return LocalSettings(
             projects,
             addresses,
             saved.version if saved else None,
             sha256(raw).hexdigest(),
         )
+
+    def _setup_inputs(self, doc: TOMLDocument) -> InboxInputs | None:
+        try:
+            return self._inputs(doc)
+        except LocalConfigurationError:
+            return None
 
     def _inputs(self, doc: TOMLDocument) -> InboxInputs | None:
         inbox = doc.get("inbox")
@@ -187,6 +200,20 @@ class TomlSettings:
             raise self._error(
                 "Could not save the file. Check directory permissions."
             ) from None
+
+    def _restore(self, updated: bytes, raw: bytes, *, existed: bool) -> None:
+        try:
+            if existed:
+                self._write(updated, raw)
+            else:
+                path = self._path.resolve()
+                self._check_unchanged(updated)
+                path.unlink()
+        except (InboxSettingsChanged, LocalConfigurationError, OSError) as error:
+            raise self._error(
+                "Inbox settings were not committed and the configuration could not "
+                "be restored. Check the file before retrying."
+            ) from error
 
     def _error(self, message: str) -> LocalConfigurationError:
         return LocalConfigurationError(f"{self._path}: {message}")

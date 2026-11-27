@@ -133,7 +133,10 @@ def _execute[Report](
                 utf8_only=full,
             )
             checks, index, findings, stopped = run_local_checks(
-                rows, work, retrieve_context=False
+                rows,
+                work,
+                retrieve_context=False,
+                eligible=text_eligible if full else None,
             )
             compiled_failures = {
                 finding.anchor.path
@@ -184,7 +187,14 @@ def _execute[Report](
                 )
                 limits.preparing_investigation = False
                 batch = run_semantic_batch(
-                    bundle, source, model, ledger, limits, monotonic, evidence=index
+                    bundle,
+                    source,
+                    model,
+                    ledger,
+                    limits,
+                    monotonic,
+                    analyzer=analyzer,
+                    evidence=index,
                 )
             else:
                 reason: BehaviorGap = (

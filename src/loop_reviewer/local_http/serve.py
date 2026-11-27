@@ -35,6 +35,7 @@ class BrowserServer(uvicorn.Server):
         self._url = f"{address}/#capability={capability}"
         self._open_browser = open_browser
         self._stop_watch: Callable[[], None] = app.state.stop_watch
+        self._stop_launches: Callable[[], None] = app.state.stop_launches
 
     @override
     async def startup(self, sockets: list[socket.socket] | None = None) -> None:
@@ -49,6 +50,7 @@ class BrowserServer(uvicorn.Server):
 
     @override
     async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
+        self._stop_launches()
         self._stop_watch()
         await super().shutdown(sockets)
 

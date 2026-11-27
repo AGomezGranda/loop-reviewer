@@ -6,13 +6,14 @@ from typing import Never, cast
 from loop_reviewer.inbox.actions import InboxActions
 from loop_reviewer.inbox.configuration import ConfigureLocal
 from loop_reviewer.local_http.app import create_app
+from loop_reviewer.review.active import ActiveReviews
 from loop_reviewer.review.drafts import EditReviewDraft
 from loop_reviewer.review.generate import ReviewOutcome
 from loop_reviewer.review.history import ReviewHistory
 from loop_reviewer.review.publication import PreparePublication, PublishReview
 
 
-def _offline(*_args: object) -> Never:
+def _offline(*_args: object, **_kwargs: object) -> Never:
     raise RuntimeError("Schema export does not run workflows.")
 
 
@@ -29,6 +30,7 @@ def main() -> None:
         review_pull_request=_offline,
         drafts=cast("EditReviewDraft", None),
         review_history=cast("ReviewHistory", None),
+        active_reviews=cast("ActiveReviews", None),
         prepare=cast("PreparePublication", None),
         publish=cast("PublishReview", None),
         join_watch=_offline,

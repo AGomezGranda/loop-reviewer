@@ -8,10 +8,11 @@ from loop_reviewer.reviewer.discussion_contract import (
     DiscussionTarget,
 )
 from loop_reviewer.reviewer.discussion_report import DiscussionReviewResult
+from loop_reviewer.reviewer.integrations.python_analyzer import CpythonAnalyzer
 from loop_reviewer.reviewer.semantic_review import review_semantic_with_discussion
 from tests.support.discussion import discussion_request, known_snapshot, snapshot_data
 from tests.test_local_checks import PINS, row
-from tests.test_semantic_batch import ScriptedModel, WitnessAnalyzer, WitnessSource
+from tests.test_semantic_batch import ScriptedModel, WitnessSource
 
 
 @pytest.mark.parametrize(
@@ -164,7 +165,7 @@ def test_v4_result_rejects_invalid_link_dispositions(scenario: str) -> None:
     report = review_semantic_with_discussion(
         discussion_request(100, known_snapshot(count=2)),
         source.open,
-        WitnessAnalyzer(),
+        CpythonAnalyzer(),
         ScriptedModel(),
         lambda: 0,
     )

@@ -28,12 +28,18 @@ class InboxActions[ReviewResult]:
         self._refresh_settings = refresh_settings
 
     def open(
-        self, ref: PullRequestRef, *, expected_target: InboxRowTarget | None = None
+        self,
+        ref: PullRequestRef,
+        *,
+        expected_target: InboxRowTarget | None = None,
+        review: Callable[[PullRequestRef, ReviewIdentity], ReviewResult] | None = None,
     ) -> tuple[PullRequestRef, ReviewResult]:
         if self._refresh_settings is not None:
             self._refresh_settings()
         target = self._target(ref, expected_target)
-        return target.ref, self._review(target.ref, target.identity)
+        return target.ref, (self._review if review is None else review)(
+            target.ref, target.identity
+        )
 
     def defer(
         self, ref: PullRequestRef, *, expected_target: InboxRowTarget | None = None

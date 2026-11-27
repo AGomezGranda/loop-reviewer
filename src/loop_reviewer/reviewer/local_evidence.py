@@ -125,6 +125,7 @@ class LocalEvidenceWork:
             and (blob.blob_id, len(blob.text))
             != (expected.object_id, expected.blob_bytes)
         ):
+            self.blobs[key] = "unavailable"
             return "unavailable"
         return blob
 

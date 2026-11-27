@@ -1,58 +1,66 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	useMutation,
+	useMutationState,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { ApiError, errorMessage } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { InboxList } from "./inbox-list";
-import { inboxQuery, moveRow, openRow, scanInbox } from "./inbox-queries";
+import { inboxQuery, launchRow, moveRow, scanInbox } from "./inbox-queries";
 import type { InboxIntent } from "./inbox-row";
 import { RepositoryHealth } from "./repository-checks";
 
-type Outcome = Awaited<ReturnType<typeof openRow>>;
+type InboxAction = InboxIntent | "scan";
+const actionKey = ["inbox-action"];
 
 export function InboxScreen({
-	onOpened,
+	onAccepted,
+	reviewsLink,
 	setupLink,
 	disconnected,
 }: {
-	onOpened: (outcome: Outcome) => string | undefined;
+	onAccepted: () => string;
+	reviewsLink: ReactNode;
 	setupLink: ReactNode;
 	disconnected?: boolean;
 }) {
 	const cache = useQueryClient();
 	const inbox = useQuery(inboxQuery);
-	const [notice, setNotice] = useState("");
+	const [notice, setNotice] = useState<{ text: string; accepted?: boolean }>();
+	const pending = useMutationState({
+		filters: { mutationKey: actionKey, status: "pending" },
+		select: (mutation) => mutation.state.variables as InboxAction,
+	});
+	const scanning = pending.includes("scan");
 	const update = useMutation({
-		mutationFn: async ({
-			intent,
-		}: {
-			intent: InboxIntent | "scan";
-			onOpened: typeof onOpened;
-		}) => {
+		mutationKey: actionKey,
+		mutationFn: async (intent: InboxAction) => {
 			if (intent === "scan") return scanInbox();
-			if (intent.action === "open") return openRow(intent.target);
+			if (intent.action === "open") return launchRow(intent.target);
 			return moveRow(intent.target, intent.action === "later");
 		},
-		onMutate: () => setNotice(""),
-		onSuccess: (result, request) => {
-			if (result.kind === "report" || result.kind === "unconfigured") {
-				cache.setQueryData(inboxQuery.queryKey, result);
-			} else {
-				setNotice(request.onOpened(result) ?? "");
+		onMutate: () => setNotice(undefined),
+		onSuccess: (result) => {
+			if ("launchId" in result) {
+				setNotice({ text: onAccepted(), accepted: true });
+				return;
 			}
-			void cache.invalidateQueries({ queryKey: inboxQuery.queryKey });
+			return cache.invalidateQueries({ queryKey: inboxQuery.queryKey });
 		},
 		onError: (error) => {
 			if (
 				error instanceof ApiError &&
 				["inbox_changed", "identity_changed"].includes(error.details.code)
 			) {
-				setNotice(
-					`${error.message} Choose the row again after the list refreshes.`,
-				);
+				setNotice({
+					text: `${error.message} Choose the row again after the list refreshes.`,
+				});
 				void cache.invalidateQueries({ queryKey: inboxQuery.queryKey });
 			} else {
-				setNotice(errorMessage(error));
+				setNotice({ text: errorMessage(error) });
 			}
 		},
 	});
@@ -66,8 +74,8 @@ export function InboxScreen({
 					<Button
 						type="button"
 						variant="outline"
-						disabled={update.isPending}
-						onClick={() => update.mutate({ intent: "scan", onOpened })}
+						disabled={scanning}
+						onClick={() => update.mutate("scan")}
 					>
 						<RefreshCw aria-hidden="true" /> Scan now
 					</Button>
@@ -78,18 +86,14 @@ export function InboxScreen({
 					Inbox watch disconnected. Scan now is available.
 				</p>
 			)}
-			{update.isPending && (
+			{scanning && (
 				<p role="status" className="text-sm">
-					{update.variables?.intent === "scan"
-						? "Scanning repositories…"
-						: update.variables?.intent.action === "open"
-							? "Opening review…"
-							: "Updating inbox…"}
+					Scanning repositories…
 				</p>
 			)}
 			{notice && (
 				<p role="status" className="rounded-md border px-3 py-2 text-sm">
-					{notice}
+					<span>{notice.text}</span> {notice.accepted && reviewsLink}
 				</p>
 			)}
 			{inbox.isPending && <p role="status">Loading inbox…</p>}
@@ -113,8 +117,8 @@ export function InboxScreen({
 					<RepositoryHealth report={report} />
 					<InboxList
 						report={report}
-						busy={update.isPending}
-						onAction={(intent) => update.mutate({ intent, onOpened })}
+						pending={pending.filter((intent) => intent !== "scan")}
+						onAction={(intent) => update.mutate(intent)}
 					/>
 				</>
 			)}

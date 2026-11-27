@@ -21,6 +21,7 @@ from loop_reviewer.review.generate import (
     DraftReview,
     DraftReviewStatus,
     FailedReview,
+    RetryTarget,
     ReviewerError,
     ReviewOutcome,
     SavedDraftHistoryUnavailable,
@@ -184,8 +185,11 @@ class StubApplication:
         *,
         retry: bool = False,
         expected_identity: ReviewIdentity | None = None,
+        observe_selection: Callable[[ReviewSelection], None] | None = None,
+        retry_target: RetryTarget | None = None,
     ) -> ReviewOutcome:
         assert expected_identity is None
+        assert observe_selection is None and retry_target is None
         assert ref == PullRequestRef("git.example.com", "acme", "repo", 7)
         self.recorded["retry"] = retry
         if self.error is not None:
@@ -420,6 +424,15 @@ def test_cli_review_displays_private_draft(
             id="unsupported-input",
         ),
         pytest.param(
+            FailedReview(
+                "The selected comparison is no longer available from GitHub. "
+                "Select the pull request again with open.",
+                "input",
+            ),
+            "Fix the problem",
+            id="legacy-missing-pin",
+        ),
+        pytest.param(
             FailedReview("Legacy failure.", None),
             "Fix the problem",
             id="legacy-failure",
@@ -452,7 +465,7 @@ def test_cli_review_reports_next_action(
     assert "?view=" not in captured.err and "#details" not in captured.err
     if isinstance(outcome, FailedReview):
         assert outcome.message in captured.err
-        assert ("--retry" in captured.err) == (outcome.kind != "input")
+        assert ("--retry" in captured.err) == (message == "Fix the problem")
 
 
 @pytest.mark.parametrize(

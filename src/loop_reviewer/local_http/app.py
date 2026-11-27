@@ -1,8 +1,10 @@
 """Register the local HTTP contract with injected workflows."""
 
+from asyncio import to_thread
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractContextManager, asynccontextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, FastAPI, Request
 from starlette.responses import FileResponse, JSONResponse
@@ -14,9 +16,11 @@ from loop_reviewer.inbox.model import InboxReport
 from loop_reviewer.inbox.polling import ScanCycle
 from loop_reviewer.local_http import history, inbox, publication, review
 from loop_reviewer.local_http.errors import ERROR_TYPES, api_error
+from loop_reviewer.local_http.launches import ReviewLaunches, ReviewRequest
 from loop_reviewer.local_http.models import ErrorResponse
 from loop_reviewer.local_http.session import LocalSession, error_response
 from loop_reviewer.local_http.watch import BrowserWatch
+from loop_reviewer.review.active import ActiveReviews
 from loop_reviewer.review.drafts import EditReviewDraft
 from loop_reviewer.review.generate import (
     ReviewOutcome,
@@ -26,7 +30,6 @@ from loop_reviewer.review.publication import (
     PreparePublication,
     PublishReview,
 )
-from loop_reviewer.review.pull_request import PullRequestRef
 
 
 def create_app(
@@ -38,9 +41,10 @@ def create_app(
     scan_inbox: Callable[[], InboxReport],
     configure_inbox: ConfigureLocal,
     inbox_actions: InboxActions[ReviewOutcome],
-    review_pull_request: Callable[[PullRequestRef, bool], ReviewOutcome],
+    review_pull_request: ReviewRequest,
     drafts: EditReviewDraft,
     review_history: ReviewHistory,
+    active_reviews: ActiveReviews,
     prepare: PreparePublication,
     publish: PublishReview,
     join_watch: Callable[[], AbstractContextManager[None]],
@@ -49,11 +53,16 @@ def create_app(
     assets: Path | None = None,
 ) -> FastAPI:
     watch = BrowserWatch(join_watch, watch_tick, watch_cycle)
+    launches = ReviewLaunches(lambda: str(uuid4()))
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-        yield
-        await watch.drain()
+        try:
+            yield
+        finally:
+            launches.stop()
+            await to_thread(launches.close)
+            await watch.drain()
 
     app = FastAPI(
         title="Loop Reviewer Local API",
@@ -65,6 +74,7 @@ def create_app(
         redirect_slashes=False,
     )
     app.state.stop_watch = watch.stop
+    app.state.stop_launches = launches.stop
     app.add_middleware(LocalSession, origin=origin, capability=capability)
     api = APIRouter(
         prefix="/api/v1",
@@ -82,9 +92,15 @@ def create_app(
             inbox_actions,
             review_history,
             watch,
+            review_pull_request,
+            launches,
         )
     )
-    api.include_router(review.routes(review_pull_request, drafts, review_history))
+    api.include_router(
+        review.routes(
+            review_pull_request, drafts, review_history, active_reviews, launches
+        )
+    )
     api.include_router(publication.routes(review_history, prepare, publish))
     api.include_router(history.routes(review_history))
     app.include_router(api)
@@ -99,6 +115,7 @@ def create_app(
         for path in (
             "/",
             "/inbox",
+            "/reviews",
             "/setup",
             "/history",
             "/history/{runId}",

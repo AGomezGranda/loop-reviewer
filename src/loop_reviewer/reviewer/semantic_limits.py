@@ -20,6 +20,10 @@ VERIFY_PROMPT = 12 * 1024
 VERIFY_OUTPUT = 4 * 1024
 
 
+class VerificationPacketLimit(Exception):
+    pass
+
+
 Failure = Literal[
     "work_limit",
     "budget_exhausted",
@@ -84,7 +88,15 @@ class SemanticLimits:
             0, rest - VERIFY_OUTPUT if investigation else min(rest, VERIFY_OUTPUT)
         )
 
-    def prepare(self, evidence: int, request: int, *, investigation: bool) -> None:
+    def prepare(
+        self, evidence: int, request: int, *, investigation: bool, trim: bool = False
+    ) -> None:
+        if (
+            self.preserve_verification_reserve
+            and not investigation
+            and (evidence > VERIFY_EVIDENCE or request > VERIFY_PROMPT)
+        ):
+            raise VerificationPacketLimit
         evidence_cap = self.preparation_limit(investigation=investigation)
         remaining = self.prompt_limit - self.prompt_bytes
         prompt_cap = min(self.retrieval_left, remaining)
@@ -93,6 +105,8 @@ class SemanticLimits:
         else:
             prompt_cap = min(prompt_cap, VERIFY_PROMPT)
         fits = evidence <= evidence_cap and request <= prompt_cap
+        if trim and not fits:
+            raise VerificationPacketLimit
         if fits or not self.preserve_verification_reserve:
             self.evidence_bytes += evidence
             self.prompt_bytes += request

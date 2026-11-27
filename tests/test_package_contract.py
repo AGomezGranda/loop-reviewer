@@ -14,6 +14,7 @@ _REVIEW = f"{_PACKAGE.name}.review"
 _REVIEWER = f"{_PACKAGE.name}.reviewer"
 _REPORT = f"{_REVIEWER}.full_review_contract.FullReviewResult"
 _SOURCE_NAMES = f"{_PACKAGE.name}.source_names"
+_FEEDBACK_TEXT = f"{_PACKAGE.name}.feedback_text"
 _INBOX = f"{_PACKAGE.name}.inbox"
 _CLI_ROOT = _PACKAGE / "cli" / "__init__.py"
 _ENVIRONMENT_APIS = {"environ", "environb", "getenv", "getenvb", "putenv", "unsetenv"}
@@ -66,7 +67,11 @@ def test_review_workflow_uses_reviewer_only_at_its_boundary() -> None:
         v
         for path in (_PACKAGE / "review").rglob("*.py")
         for v in _import_violations(
-            path, _REVIEW, _SOURCE_NAMES, *reviewer_imports.get(path.name, ())
+            path,
+            _REVIEW,
+            _SOURCE_NAMES,
+            _FEEDBACK_TEXT,
+            *reviewer_imports.get(path.name, ()),
         )
     ]
     assert not violations, "Unexpected review imports:\n" + "\n".join(violations)
@@ -90,12 +95,21 @@ def test_reviewer_policy_imports_only_stdlib_and_reviewer_contracts() -> None:
                 path,
                 _REVIEWER,
                 _SOURCE_NAMES,
+                _FEEDBACK_TEXT,
                 *(("pydantic",) if path.name in contracts else ()),
             ),
             *(
                 f"{path.relative_to(_PACKAGE)}:{line}: {name}"
                 for line, name in _imported_names(path)
-                if _within(name, f"{_REVIEWER}.integrations")
+                if any(
+                    _within(name, root)
+                    for root in (
+                        f"{_REVIEWER}.integrations",
+                        "ast",
+                        "importlib.machinery",
+                        "sys",
+                    )
+                )
             ),
         ]
     ]
@@ -107,6 +121,7 @@ def test_reviewer_policy_imports_only_stdlib_and_reviewer_contracts() -> None:
 def test_shared_helpers_import_only_stdlib() -> None:
     assert not _import_violations(_PACKAGE / "integrations" / "review_process.py")
     assert not _import_violations(_PACKAGE / "source_names.py")
+    assert not _import_violations(_PACKAGE / "feedback_text.py")
 
 
 def test_inbox_imports_review_only_through_its_read_contract_and_types() -> None:

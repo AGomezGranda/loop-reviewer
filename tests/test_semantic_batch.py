@@ -5,6 +5,7 @@ from typing import override
 import pytest
 
 from loop_reviewer.reviewer.integrations.git_hunks import decode_hunks
+from loop_reviewer.reviewer.integrations.python_analyzer import CpythonAnalyzer
 from loop_reviewer.reviewer.inventory import RevisionSide
 from loop_reviewer.reviewer.inventory_contract import ChangedFile
 from loop_reviewer.reviewer.local_evidence import EvidenceIndex, LocalEvidenceWork
@@ -23,16 +24,10 @@ from loop_reviewer.reviewer.pinned_source import (
     ReadFailure,
     SearchPaths,
 )
-from loop_reviewer.reviewer.python_context import (
-    Call,
-    Declaration,
-    ImportAlias,
-    PythonAnalysis,
-)
 from loop_reviewer.reviewer.semantic_batch import run_semantic_batch
 from loop_reviewer.reviewer.semantic_inputs import build_targeted_bundle
 from loop_reviewer.reviewer.semantic_limits import SemanticLimits
-from tests.test_local_checks import PINS, Analyzer, Source, row
+from tests.test_local_checks import PINS, Source, row
 
 BASE = b"def items():\n    return None\n"
 HEAD = BASE.replace(b"None", b"[]")
@@ -108,25 +103,6 @@ class WitnessSource(Source):
             + self.base.splitlines()[1]
             + b"\n+    return []\n"
         )
-
-
-class WitnessAnalyzer(Analyzer):
-    def __init__(self) -> None:
-        super().__init__(head_error=False)
-
-    @override
-    def analyze(
-        self, blob: PinnedTextBlob, *, timeout_seconds: float
-    ) -> PythonAnalysis:
-        diagnostic = super().analyze(blob, timeout_seconds=timeout_seconds).diagnostic
-        if blob.path == "consumer.py":
-            return PythonAnalysis(
-                diagnostic,
-                (Declaration("first", "function", 3, 7),),
-                (Call("items", 4, 4),),
-                (ImportAlias("items", "producer.items"),),
-            )
-        return PythonAnalysis(diagnostic, (Declaration("items", "function", 1, 2),))
 
 
 class ScriptedModel:
@@ -245,11 +221,18 @@ def test_batch_disposition_requires_a_pinned_witness(
     source = WitnessSource(mode)
     model = ScriptedModel(assessment=assessment, kind=kind, producer=source.producer)
     index = EvidenceIndex()
-    work = LocalEvidenceWork(source, WitnessAnalyzer(), PINS, lambda: 0, 120)
+    work = LocalEvidenceWork(source, CpythonAnalyzer(), PINS, lambda: 0, 120)
     bundle = build_targeted_bundle(PINS, source.rows, work, index, 8192)
     ledger = SpendLedger(1000, lambda: 0)
     outcome = run_semantic_batch(
-        bundle, source, model, ledger, SemanticLimits(120), lambda: 0, evidence=index
+        bundle,
+        source,
+        model,
+        ledger,
+        SemanticLimits(120),
+        lambda: 0,
+        analyzer=CpythonAnalyzer(),
+        evidence=index,
     )
     if wanted == "finding":
         (finding,) = outcome.findings
@@ -276,12 +259,19 @@ def test_completed_finding_survives_exhausted_followup_and_non_inline_anchor() -
     source = WitnessSource()
     model = ScriptedModel(second=True, anchor="context")
     index = EvidenceIndex()
-    work = LocalEvidenceWork(source, WitnessAnalyzer(), PINS, lambda: 0, 120)
+    work = LocalEvidenceWork(source, CpythonAnalyzer(), PINS, lambda: 0, 120)
     bundle = build_targeted_bundle(PINS, source.rows, work, index, 8192)
     ledger = SpendLedger(27, lambda: 0)
     limits = SemanticLimits(120, evidence_limit=bundle.evidence_bytes + 2048)
     result = run_semantic_batch(
-        bundle, source, model, ledger, limits, lambda: 0, evidence=index
+        bundle,
+        source,
+        model,
+        ledger,
+        limits,
+        lambda: 0,
+        analyzer=CpythonAnalyzer(),
+        evidence=index,
     )
     assert len(result.findings) == 1 and result.findings[0].anchor is None
     assert result.stop == "work_limit" and result.gaps == {"p00001": "work_limit"}
@@ -327,7 +317,7 @@ def test_batch_deduplicates_only_proven_equivalence(distinct: bool) -> None:
         kind="distinct" if distinct else "candidate", second=not distinct
     )
     index = EvidenceIndex()
-    work = LocalEvidenceWork(source, WitnessAnalyzer(), PINS, lambda: 0, 120)
+    work = LocalEvidenceWork(source, CpythonAnalyzer(), PINS, lambda: 0, 120)
     bundle = build_targeted_bundle(PINS, source.rows, work, index, 8192)
     result = run_semantic_batch(
         bundle,
@@ -336,6 +326,7 @@ def test_batch_deduplicates_only_proven_equivalence(distinct: bool) -> None:
         SpendLedger(1000, lambda: 0),
         SemanticLimits(120),
         lambda: 0,
+        analyzer=CpythonAnalyzer(),
         evidence=index,
     )
     assert [f.id for f in result.findings] == (

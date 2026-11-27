@@ -6,7 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, Link, Outlet, RouterProvider } from "react-router";
 import { afterEach, expect, test, vi } from "vitest";
 import { OpenReviewForm } from "@/features/review/open-review-form";
-import { useReviewNavigation } from "./review-navigation";
+import { useReviewLaunch } from "./review-navigation";
 
 afterEach(() => {
 	cleanup();
@@ -17,7 +17,10 @@ afterEach(() => {
 function Layout() {
 	return (
 		<>
-			<OpenReviewForm onOpened={useReviewNavigation()} />
+			<OpenReviewForm
+				onAccepted={useReviewLaunch()}
+				reviewsLink={<Link to="/reviews">View Reviews</Link>}
+			/>
 			<Link to="/setup">Setup</Link>
 			<Outlet />
 		</>
@@ -28,8 +31,8 @@ test.each([
 	{
 		name: "same history entry",
 		leaves: false,
-		path: "/history/7",
-		heading: "Completed review",
+		path: "/",
+		heading: "Review inbox",
 	},
 	{
 		name: "new history entry",
@@ -38,7 +41,7 @@ test.each([
 		heading: "Inbox setup",
 	},
 ])(
-	"routes one-off results from the $name",
+	"keeps the current route when a launch is accepted from the $name",
 	async ({ leaves, path, heading }) => {
 		sessionStorage.setItem("loop-reviewer.capability", "test");
 		let resolveOpen!: (response: Response) => void;
@@ -55,7 +58,7 @@ test.each([
 				children: [
 					{ index: true, element: <h1>Review inbox</h1> },
 					{ path: "setup", element: <h1>Inbox setup</h1> },
-					{ path: "history/:runId", element: <h1>Completed review</h1> },
+					{ path: "reviews", element: <h1>Reviews</h1> },
 				],
 			},
 		]);
@@ -71,12 +74,39 @@ test.each([
 		);
 		await user.click(screen.getByRole("button", { name: "Open review" }));
 		if (leaves) await user.click(screen.getByRole("link", { name: "Setup" }));
-		resolveOpen(
-			Response.json({ kind: "completion", completion: { runId: "7" } }),
-		);
+		resolveOpen(Response.json({ launchId: "7" }, { status: 202 }));
 		await screen.findByRole("heading", { name: heading });
-		if (leaves)
-			await screen.findByText("The completed review is available in History.");
+		await screen.findByText("Review submitted.");
+		expect(
+			screen.getByRole("link", { name: "View Reviews" }).getAttribute("href"),
+		).toBe("/reviews");
+		expect(
+			(screen.getByLabelText("Pull request URL") as HTMLInputElement).value,
+		).toBe("");
 		expect(router.state.location.pathname).toBe(path);
 	},
 );
+
+test("shows the backend setup guidance verbatim", async () => {
+	sessionStorage.setItem("loop-reviewer.capability", "test");
+	const message = "Set LOOP_REVIEWER_MAX_MODEL_SPEND_USD_MICROS.";
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () =>
+			Response.json({ code: "review_unavailable", message }, { status: 409 }),
+		),
+	);
+	const router = createMemoryRouter([{ path: "/", Component: Layout }]);
+	render(
+		<QueryClientProvider client={new QueryClient()}>
+			<RouterProvider router={router} />
+		</QueryClientProvider>,
+	);
+	const user = userEvent.setup();
+	await user.type(
+		screen.getByLabelText("Pull request URL"),
+		"https://github.com/org/repo/pull/7",
+	);
+	await user.click(screen.getByRole("button", { name: "Open review" }));
+	await screen.findByText(message);
+});

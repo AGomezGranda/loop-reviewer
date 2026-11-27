@@ -24,6 +24,6 @@ export function moveRow(body: RowAction, later: boolean) {
 		: request("post", "/api/v1/inbox/restore", { body });
 }
 
-export function openRow(body: RowAction) {
-	return request("post", "/api/v1/inbox/open", { body });
+export function launchRow(body: RowAction) {
+	return request("post", "/api/v1/inbox/launch", { body });
 }

@@ -46,9 +46,9 @@ class BrowserWatch:
             membership = self._join()
             membership.__enter__()
             self._membership = membership
-            if self._polling is None or self._polling.done():
-                self._polling = asyncio.create_task(self._poll())
         self._listeners.add(listener)
+        if self._polling is None or self._polling.done():
+            self._polling = asyncio.create_task(self._poll())
         try:
             yield _line("ready")
             while True:

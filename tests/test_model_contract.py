@@ -40,6 +40,8 @@ REPLY = {
         "enum",
         "id",
         "bound",
+        "blank-trigger",
+        "control-in-consequence",
         "duplicate",
         "missing-nullable",
         "duplicate-key",
@@ -61,6 +63,10 @@ def test_strict_investigation_reply(case: str) -> None:
             payload["reviewed_file_ids"] = ["/path.py"]
         case "bound":
             payload["candidates"][0]["trigger"] = "x" * 1025
+        case "blank-trigger":
+            payload["candidates"][0]["trigger"] = " \t"
+        case "control-in-consequence":
+            payload["candidates"][0]["consequence"] = "Issue\x00"
         case "duplicate":
             payload["reviewed_file_ids"] *= 2
         case "missing-nullable":

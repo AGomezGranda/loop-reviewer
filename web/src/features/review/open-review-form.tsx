@@ -1,41 +1,35 @@
 import { useMutation } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { errorMessage } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { type OpenOutcome, openReview } from "./review-queries";
+import { launchReview } from "./review-queries";
 
 export function OpenReviewForm({
-	onOpened,
+	onAccepted,
+	reviewsLink,
 }: {
-	onOpened: (outcome: OpenOutcome) => string | undefined;
+	onAccepted: () => string;
+	reviewsLink: ReactNode;
 }) {
 	const [url, setUrl] = useState("");
 	const [notice, setNotice] = useState("");
 	const open = useMutation({
-		mutationFn: ({
-			url,
-			retry,
-		}: {
-			url: string;
-			retry: boolean;
-			onOpened: typeof onOpened;
-		}) => openReview(url, retry),
+		mutationFn: launchReview,
 		onMutate: () => setNotice(""),
-		onSuccess: (outcome, request) => setNotice(request.onOpened(outcome) ?? ""),
+		onSuccess: () => {
+			setUrl("");
+			setNotice(onAccepted());
+		},
 		onError: (error) => setNotice(errorMessage(error)),
 	});
-	const canRetry =
-		open.variables?.url === url &&
-		(open.data?.kind === "failure" ||
-			(open.data?.kind === "unavailable" && open.data.reason === "abandoned"));
 	return (
 		<form
 			className="min-w-0 space-y-2"
 			onSubmit={(event) => {
 				event.preventDefault();
-				open.mutate({ url, retry: false, onOpened });
+				if (!open.isPending) open.mutate(url);
 			}}
 		>
 			<label htmlFor="one-off-url" className="text-xs font-medium">
@@ -58,20 +52,11 @@ export function OpenReviewForm({
 					{open.isPending ? "Opening…" : "Open review"}{" "}
 					<ArrowRight aria-hidden="true" />
 				</Button>
-				{canRetry && (
-					<Button
-						type="button"
-						variant="outline"
-						disabled={open.isPending}
-						onClick={() => open.mutate({ url, retry: true, onOpened })}
-					>
-						Retry review
-					</Button>
-				)}
 			</div>
 			{(notice || open.isPending) && (
 				<p role="status" className="text-sm text-muted-foreground">
-					{notice || "Opening private review…"}
+					<span>{notice || "Submitting review…"}</span>{" "}
+					{open.isSuccess && reviewsLink}
 				</p>
 			)}
 		</form>

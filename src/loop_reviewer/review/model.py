@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, Self, TypeIs
 from unicodedata import category
 
+from loop_reviewer.feedback_text import validate_feedback_text
 from loop_reviewer.review.pull_request import (
     PullRequestRef,
     ReviewComparison,
@@ -241,12 +242,10 @@ class ReviewDraft:
 
 
 def _validate_feedback(text: str) -> None:
-    if not text.strip():
-        raise DraftValidationError("Feedback must not be blank.")
-    if any(char not in "\n\t" and category(char) in {"Cc", "Cs"} for char in text):
-        raise DraftValidationError(
-            "Feedback contains an unsupported control or surrogate character."
-        )
+    try:
+        validate_feedback_text(text)
+    except ValueError as error:
+        raise DraftValidationError(str(error)) from error
     if len(text.encode("utf-8")) > MAX_EDIT_BYTES:
         raise DraftValidationError("Feedback must be at most 64 KiB per field.")
 

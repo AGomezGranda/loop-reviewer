@@ -37,6 +37,24 @@ def test_worker_compiles_without_executing(
     assert invalid.diagnostic.location.start_line == 1
 
 
+def test_compiler_rejection_keeps_ast_context_without_runtime_witness() -> None:
+    analysis = CpythonAnalyzer().analyze(
+        blob(
+            b"from producer import get_value\n"
+            b"def consumer():\n"
+            b"    __debug__ = get_value()\n"
+            b"    if __debug__ is None:\n"
+            b"        return 0\n"
+            b"    return __debug__[0]\n"
+        ),
+        timeout_seconds=2,
+    )
+    assert not isinstance(analysis, str)
+    assert analysis.diagnostic.result == "syntax_error"
+    assert analysis.declarations
+    assert analysis.indexed_call is None
+
+
 def test_ast_fact_cap_does_not_erase_a_compiler_result() -> None:
     source = b"".join(f"def f{i}(): pass\n".encode() for i in range(150))
     analysis = CpythonAnalyzer().analyze(

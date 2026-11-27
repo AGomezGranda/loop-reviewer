@@ -156,6 +156,7 @@ type ErrorCode = Literal[
     "publication_preflight",
     "github_unavailable",
     "review_unavailable",
+    "review_queue_full",
     "local_state",
     "internal_error",
 ]

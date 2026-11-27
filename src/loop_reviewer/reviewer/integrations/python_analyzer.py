@@ -3,6 +3,7 @@
 import re
 import sys
 import tempfile
+from importlib.machinery import FrozenImporter
 from math import isfinite
 from pathlib import Path
 from subprocess import TimeoutExpired
@@ -15,6 +16,7 @@ from loop_reviewer.integrations.review_process import (
     OutputLimitExceeded,
     capture_review_process,
 )
+from loop_reviewer.reviewer.inventory_contract import decode_path
 from loop_reviewer.reviewer.pinned_source import (
     PinnedTextBlob,
     ReadFailure,
@@ -24,12 +26,15 @@ from loop_reviewer.reviewer.python_context import (
     Call,
     Declaration,
     Diagnostic,
+    EmptyReturn,
     ImportAlias,
+    IndexedCall,
     PythonAnalysis,
 )
 
 _WORKER = Path(__file__).resolve().with_name("python_analyzer_worker.py")
 _Name = Annotated[str, Field(min_length=1, max_length=512)]
+_WitnessName = Annotated[str, Field(min_length=1, max_length=16 * 1024)]
 _Line = Annotated[int, Field(ge=1, le=128 * 1024)]
 
 
@@ -50,10 +55,28 @@ class _WorkerReport(BaseModel):
     calls: Annotated[tuple[tuple[_Name, _Line, _Line], ...], Field(max_length=128)]
     imports: Annotated[tuple[tuple[_Name, _Name], ...], Field(max_length=128)]
     limited: bool
+    empty_return: tuple[_WitnessName, Literal["None", "[]", "()"], _Line] | None
+    indexed_call: tuple[_WitnessName, _WitnessName, _WitnessName, bool, _Line] | None
 
 
 def _is_dotted(name: str) -> bool:
     return all(part.isidentifier() for part in name.split("."))
+
+
+def _witness_module(path: str) -> str | None:
+    raw = decode_path(path)
+    if not raw.endswith(b".py") or not raw.isascii():
+        return None
+    name = raw[:-3].decode("ascii")
+    if (
+        not name.isidentifier()
+        or name == "__init__"
+        or name in sys.stdlib_module_names
+        or name in sys.builtin_module_names
+        or FrozenImporter.find_spec(name) is not None
+    ):
+        return None
+    return name
 
 
 def _from_worker(output: bytes, blob: PinnedTextBlob) -> PythonAnalysis | ReadFailure:
@@ -85,8 +108,26 @@ def _from_worker(output: bytes, blob: PinnedTextBlob) -> PythonAnalysis | ReadFa
         for name, qualified in report.imports
     ):
         return "unavailable"
+    producer, caller = report.empty_return, report.indexed_call
+    if producer is not None and (
+        not producer[0].isidentifier() or producer[2] > line_count
+    ):
+        return "unavailable"
+    if caller is not None and (
+        not caller[0].isidentifier()
+        or not _is_dotted(caller[1])
+        or not caller[2].isidentifier()
+        or caller[4] > line_count
+    ):
+        return "unavailable"
+    if (producer is not None or caller is not None) and len(blob.text) > 16 * 1024:
+        return "unavailable"
     if (
-        report.location is not None or report.declarations or report.calls
+        report.location is not None
+        or report.declarations
+        or report.calls
+        or producer is not None
+        or caller is not None
     ) and re.search(rb"\r(?!\n)", blob.text):
         return "unavailable"
     location = (
@@ -107,6 +148,11 @@ def _from_worker(output: bytes, blob: PinnedTextBlob) -> PythonAnalysis | ReadFa
         tuple(Call(*row) for row in report.calls),
         tuple(ImportAlias(*row) for row in report.imports),
         report.limited,
+        _witness_module(blob.path)
+        if producer is not None or caller is not None
+        else None,
+        EmptyReturn(*producer) if producer is not None else None,
+        IndexedCall(*caller) if caller is not None else None,
     )
 
 

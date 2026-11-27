@@ -102,3 +102,21 @@ def test_reference_ranking_labels_evidence_without_binding() -> None:
         ("test_call", "tests/test_parser.py", 1),
         ("text_match", "aaa.py", 1),
     ]
+
+
+def test_same_named_declarations_preserve_each_changed_hunk() -> None:
+    declarations = (
+        Declaration("load", "function", 1, 2),
+        Declaration("load", "function", 10, 11),
+    )
+    base = analysis("module.py", b"", base=True, declarations=declarations)
+    head = analysis("module.py", b"", declarations=declarations)
+    hunks = decode_hunks(
+        b"@@ -2 +2 @@\n-    return 1\n+    return 3\n"
+        b"@@ -11 +11 @@\n-    return 2\n+    return 4\n"
+    )
+
+    selections = select_declarations(hunks, base, head)
+    assert [item.name for item in selections] == [None, None]
+    assert [item.base.start_line for item in selections if item.base] == [2, 11]
+    assert [item.head.start_line for item in selections if item.head] == [2, 11]

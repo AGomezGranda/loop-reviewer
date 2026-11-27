@@ -119,7 +119,7 @@ def test_report_projection_only_offers_renderable_locations(
 
 def test_failed_report_cannot_be_projected() -> None:
     report = offline_report("README", "README")
-    with pytest.raises(ReviewerError, match="pinned comparison"):
+    with pytest.raises(ReviewerError, match="duplicate path"):
         project_report(report)
 
 

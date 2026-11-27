@@ -6,10 +6,16 @@ from contextlib import nullcontext
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Literal
 from unittest.mock import patch
 
 from loop_reviewer import cli, composition
+from loop_reviewer.inbox.model import (
+    DiscoveredPullRequest,
+    RepositoryAddress,
+    WatchedRepository,
+)
 from loop_reviewer.integrations import git_comparison
 from loop_reviewer.local_http.serve import serve
 from loop_reviewer.review.model import FindingLocation, PublicationReceipt
@@ -44,7 +50,8 @@ def _fixture(repo: Path) -> ReviewedRevision:
         (repo / "example.py").write_text("value = )\n")
         (repo / "settings.txt").write_text("endpoint=retired\n")
         head = commit(repo)
-        git(repo, "update-ref", "refs/pull/17/head", head)
+        for number in (17, 18, 19):
+            git(repo, "update-ref", f"refs/pull/{number}/head", head)
     base = revision(repo, "main")
     return ReviewedRevision("main", base, base, revision(repo, "refs/pull/17/head"))
 
@@ -69,6 +76,34 @@ class FakeReader:
 
     def read_revision(self, _pull_request: PullRequest) -> ReviewedRevision:
         return _REVISION
+
+
+class FakeDiscovery:
+    def __init__(self, _environment: dict[str, str]) -> None:
+        pass
+
+    def verify(self, address: RepositoryAddress) -> WatchedRepository:
+        return WatchedRepository(address, 42, "reviewer")
+
+    def list_open(
+        self, repository: WatchedRepository
+    ) -> tuple[DiscoveredPullRequest, ...]:
+        address = repository.address
+        return (
+            DiscoveredPullRequest(
+                PullRequestRef.from_repository(
+                    address.host,
+                    address.slug,
+                    17,
+                    repository_id=repository.repository_id,
+                ),
+                "First fixture review",
+                "teammate",
+                "open",
+                False,
+                ("reviewer",),
+            ),
+        )
 
 
 class BrowserModel:
@@ -135,6 +170,11 @@ class FakePublication:
     def submit(
         self, preview: PublicationPreview
     ) -> PublicationReceipt | Literal["unknown"]:
+        if (
+            os.environ.get("LOOP_REVIEWER_FIXTURE_GATES")
+            and preview.selection.ref.number == 18
+        ):
+            return "unknown"
         with (Path(os.environ["XDG_STATE_HOME"]) / "sent.jsonl").open("a") as stream:
             stream.write(
                 json.dumps(
@@ -180,13 +220,27 @@ if __name__ == "__main__":
     repo = Path(os.environ["XDG_STATE_HOME"]) / "fixture-git"
     _REVISION = _fixture(repo)
 
-    def remote(_ref: PullRequestRef) -> str:
+    def remote(ref: PullRequestRef) -> str:
+        if (gates := os.environ.get("LOOP_REVIEWER_FIXTURE_GATES")) and ref.number in (
+            17,
+            18,
+        ):
+            directory = Path(gates)
+            (directory / f"started-{ref.number}").touch()
+            deadline = monotonic() + 20
+            while not (directory / f"release-{ref.number}").exists():
+                if monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Fixture gate for PR {ref.number} was not released"
+                    )
+                sleep(0.02)
         return str(repo)
 
     with (
         patch.object(git_comparison, "_remote_url", remote),
         patch.object(composition, "open_gh_environment", fake_gh_environment),
         patch.object(composition, "GhPullRequestReader", FakeReader),
+        patch.object(composition, "GhRepositoryDiscovery", FakeDiscovery),
         patch.object(
             composition.GhDiscussionReader,
             "read",

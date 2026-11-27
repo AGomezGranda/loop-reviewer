@@ -18,13 +18,13 @@ export function InboxRow({
 	row,
 	version,
 	later,
-	busy,
+	pending,
 	onAction,
 }: {
 	row: InboxRowData;
 	version: string;
 	later: boolean;
-	busy: boolean;
+	pending: InboxIntent[];
 	onAction: (intent: InboxIntent) => void;
 }) {
 	const target = {
@@ -60,7 +60,7 @@ export function InboxRow({
 			<div className="flex items-center gap-1 lg:shrink-0">
 				<Button
 					type="button"
-					disabled={busy}
+					disabled={pending.some((intent) => intent.action === "open")}
 					onClick={() => onAction({ target, action: "open" })}
 				>
 					{row.lastSaved === "draft_ready" ? "Resume review" : "Open review"}
@@ -68,7 +68,7 @@ export function InboxRow({
 				<Button
 					type="button"
 					variant="ghost"
-					disabled={busy}
+					disabled={pending.some((intent) => intent.action !== "open")}
 					onClick={() =>
 						onAction({ target, action: later ? "restore" : "later" })
 					}

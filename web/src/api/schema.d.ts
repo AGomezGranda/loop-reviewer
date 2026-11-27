@@ -156,6 +156,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/inbox/launch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Launch Row */
+        post: operations["launch_row_api_v1_inbox_launch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inbox/open": {
         parameters: {
             query?: never;
@@ -309,6 +326,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Reviews */
+        get: operations["list_reviews_api_v1_reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reviews/launches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Launch Review */
+        post: operations["launch_review_api_v1_reviews_launches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/reviews/open": {
         parameters: {
             query?: never;
@@ -326,10 +377,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/reviews/{runId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Review */
+        post: operations["retry_review_api_v1_reviews__runId__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @enum {string} */
+        ActiveStatus: "running" | "draft_ready" | "failed" | "interrupted" | "recovery_required" | "status_unavailable";
         /** BehaviorInvestigation */
         BehaviorInvestigation: {
             /** Discarded Candidates */
@@ -671,7 +741,7 @@ export interface components {
             version: string;
         };
         /** @enum {string} */
-        ErrorCode: "invalid_input" | "invalid_host" | "invalid_origin" | "unauthorized" | "not_found" | "unsupported_media_type" | "body_too_large" | "draft_changed" | "review_completed" | "inbox_changed" | "identity_changed" | "recovery_required" | "confirmation_required" | "evidence_inconclusive" | "duplicate_risk_consent_required" | "publication_preflight" | "github_unavailable" | "review_unavailable" | "local_state" | "internal_error";
+        ErrorCode: "invalid_input" | "invalid_host" | "invalid_origin" | "unauthorized" | "not_found" | "unsupported_media_type" | "body_too_large" | "draft_changed" | "review_completed" | "inbox_changed" | "identity_changed" | "recovery_required" | "confirmation_required" | "evidence_inconclusive" | "duplicate_risk_consent_required" | "publication_preflight" | "github_unavailable" | "review_unavailable" | "review_queue_full" | "local_state" | "internal_error";
         /** ErrorResponse */
         ErrorResponse: {
             code: components["schemas"]["ErrorCode"];
@@ -881,6 +951,40 @@ export interface components {
             /** Reason */
             reason: ("work_limit" | "missing_evidence") | null;
         };
+        /** LaunchReceipt */
+        LaunchReceipt: {
+            /** Launchid */
+            launchId: string;
+        };
+        /** LaunchReview */
+        LaunchReview: {
+            /** Url */
+            url: string;
+        };
+        /** LaunchReviewRow */
+        LaunchReviewRow: {
+            /** Completedrunid */
+            completedRunId: string | null;
+            error: components["schemas"]["ErrorResponse"] | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "launch";
+            /** Launchid */
+            launchId: string;
+            selection: components["schemas"]["SelectionResponse"] | null;
+            source: components["schemas"]["LaunchSource"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "failed" | "completed";
+            /** Url */
+            url: string;
+        };
+        /** @enum {string} */
+        LaunchSource: "url" | "inbox" | "retry";
         /** LinkedExistingThread */
         LinkedExistingThread: {
             /** Candidate Id */
@@ -1072,6 +1176,7 @@ export interface components {
             /** Acceptduplicaterisk */
             acceptDuplicateRisk: boolean;
         };
+        RevisionChanges: ("target branch" | "merge base" | "head" | "repository" | "authenticated account")[] | "unavailable";
         /** RowAction */
         RowAction: {
             identity: components["schemas"]["RowIdentity"];
@@ -1101,6 +1206,27 @@ export interface components {
             number: string;
             /** Repositoryid */
             repositoryId: string;
+        };
+        /** SavedReviewRow */
+        SavedReviewRow: {
+            /** @default [] */
+            changes: components["schemas"]["RevisionChanges"];
+            /** Failure */
+            failure: string | null;
+            /** Failurekind */
+            failureKind: ("setup" | "input" | "failed") | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "saved";
+            /** Publicationid */
+            publicationId: string | null;
+            /** Runid */
+            runId: string;
+            selection: components["schemas"]["SelectionResponse"];
+            /** Status */
+            status: components["schemas"]["ActiveStatus"] | "queued";
         };
         /** SelectionResponse */
         SelectionResponse: {
@@ -2427,6 +2553,111 @@ export interface operations {
             };
         };
     };
+    launch_row_api_v1_inbox_launch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RowAction"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaunchReceipt"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     open_row_api_v1_inbox_open_post: {
         parameters: {
             query?: never;
@@ -3362,6 +3593,212 @@ export interface operations {
             };
         };
     };
+    list_reviews_api_v1_reviews_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": (components["schemas"]["SavedReviewRow"] | components["schemas"]["LaunchReviewRow"])[];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    launch_review_api_v1_reviews_launches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LaunchReview"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaunchReceipt"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     open_review_api_v1_reviews_open_post: {
         parameters: {
             query?: never;
@@ -3382,6 +3819,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DraftOutcome"] | components["schemas"]["CompletedOutcome"] | components["schemas"]["FailedOutcome"] | components["schemas"]["UnavailableOutcome"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Content Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unsupported Media Type */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    retry_review_api_v1_reviews__runId__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaunchReceipt"];
                 };
             };
             /** @description Unauthorized */

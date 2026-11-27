@@ -263,7 +263,14 @@ def _arm(
                 selected, omissions = bundle.selected_ids, bundle.omissions
                 limits.preparing_investigation = False
                 batch = run_semantic_batch(
-                    bundle, source, model, ledger, limits, monotonic, evidence=index
+                    bundle,
+                    source,
+                    model,
+                    ledger,
+                    limits,
+                    monotonic,
+                    analyzer=CpythonAnalyzer(),
+                    evidence=index,
                 )
             file_paths = {
                 f"p{i:05d}": file.path

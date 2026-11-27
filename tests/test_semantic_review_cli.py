@@ -22,11 +22,13 @@ def test_standalone_semantic_entrypoint_is_registered_and_model_optional(
     )["project"]["scripts"]
     assert scripts["loop-reviewer-semantic"] == "loop_reviewer.semantic_review_cli:main"
     init(tmp_path)
-    target = tmp_path / "module.py"
-    target.write_text("result = 0\n")
+    targets = [tmp_path / f"module{i:02d}.py" for i in range(17 if version == 3 else 1)]
+    for target in targets:
+        target.write_text("result = 0\n")
     commit(tmp_path)
     base = revision(tmp_path, "HEAD")
-    target.write_text("result = 1\n")
+    for target in targets:
+        target.write_text("result = 1\n")
     commit(tmp_path)
     args = [
         "loop-reviewer-semantic",
@@ -59,10 +61,9 @@ def test_standalone_semantic_entrypoint_is_registered_and_model_optional(
     monkeypatch.setattr(sys, "argv", args + spend + ["--allow-provider"])
     assert main() == 3
     result = json.loads(capsys.readouterr().out)
-    assert (
-        result["file_coverage"][0]["reason"] == "unsupported_model"
-        and result["usage"]["model_calls"] == 0
-    )
+    assert {row["reason"] for row in result["file_coverage"]} == {
+        "unsupported_model"
+    } and result["usage"]["model_calls"] == 0
 
 
 class _SnapshotFixture(TypedDict):

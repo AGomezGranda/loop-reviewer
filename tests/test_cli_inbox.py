@@ -16,7 +16,7 @@ from loop_reviewer.inbox.model import (
     RepositoryAddress,
     WatchedRepository,
 )
-from loop_reviewer.inbox.store import FailedScan, SuccessfulScan
+from loop_reviewer.inbox.store import FailedScan, InboxStoreError, SuccessfulScan
 from loop_reviewer.integrations.local_state.sqlite_inbox import SqliteInboxStore
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
 from loop_reviewer.review.model import (
@@ -165,6 +165,43 @@ def test_failed_setup_keeps_previous_settings(
     assert _run(monkeypatch, "scan") == 0
     output = capsys.readouterr().out
     assert "[ABC-…]" in output and "[NEW-" not in output
+    assert github.scans == [_MAIN]
+
+
+@pytest.mark.parametrize("configured", [False, True], ids=["first-save", "existing"])
+def test_failed_database_commit_restores_the_configuration(
+    configured: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    github: FakeDiscovery,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config" / "loop-reviewer" / "config.toml"
+    if configured:
+        assert _setup(monkeypatch, _MAIN) == 0
+    before = path.read_bytes() if configured else None
+
+    def fail(*args: object, **kwargs: object) -> Never:
+        raise InboxStoreError("Simulated commit failure")
+
+    with monkeypatch.context() as failure:
+        failure.setattr(SqliteInboxStore, "replace_settings", fail)
+        assert _setup(monkeypatch, _OTHER, key="NEW") == 1
+
+    assert (path.read_bytes() if path.exists() else None) == before
+    if configured:
+        assert _run(monkeypatch, "scan") == 0
+        assert github.scans == [_MAIN]
+
+
+def test_cli_setup_replaces_invalid_inbox_values(
+    monkeypatch: pytest.MonkeyPatch, github: FakeDiscovery, tmp_path: Path
+) -> None:
+    path = tmp_path / "config" / "loop-reviewer" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text('[inbox]\njira_project_key = "OLD"\nrepositories = []\n')
+    assert _run(monkeypatch, "scan") == 1
+    assert _setup(monkeypatch, _MAIN) == 0
+    assert _run(monkeypatch, "scan") == 0
     assert github.scans == [_MAIN]
 
 

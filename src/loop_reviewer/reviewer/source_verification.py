@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 from loop_reviewer.reviewer.local_check_contract import SourceEvidence, SourceLocation
-from loop_reviewer.reviewer.local_evidence import EvidenceIndex, LocalEvidenceWork
+from loop_reviewer.reviewer.local_evidence import (
+    EvidenceIndex,
+    LocalEvidenceWork,
+    WorkLimit,
+)
 from loop_reviewer.reviewer.model_contract import (
     Candidate,
     CitationRole,
@@ -111,13 +115,16 @@ def build_source_packet(
         ):
             anchor = loc
     material = tuple(accepted.values())
-    alternatives = literal_references(
-        tuple(accepted[key] for key in roles["head_change"]),
-        work,
-        index,
-        sides=("head",),
-        exclude_ids=frozenset(accepted),
-    )
+    try:
+        alternatives = literal_references(
+            tuple(accepted[key] for key in roles["head_change"]),
+            work,
+            index,
+            sides=("head",),
+            exclude_ids=frozenset(accepted),
+        )
+    except WorkLimit:
+        alternatives = ()
     return SourcePacket(
         identifier,
         candidate,

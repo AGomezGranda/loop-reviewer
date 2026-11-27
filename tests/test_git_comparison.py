@@ -118,14 +118,16 @@ def test_empty_comparison_is_valid(
 
 
 @pytest.mark.parametrize(
-    ("case", "message"),
+    ("case", "message", "kind"),
     [
-        pytest.param("missing-object", "no longer available", id="missing-object"),
-        pytest.param("nonancestor", "not an ancestor", id="nonancestor"),
+        pytest.param(
+            "missing-object", "pinned commit was missing", "failed", id="missing-object"
+        ),
+        pytest.param("nonancestor", "not an ancestor", "input", id="nonancestor"),
     ],
 )
 def test_rejects_unavailable_comparison(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, message: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, message: str, kind: str
 ) -> None:
     repository, merge_base, base_tip, head = _repository(tmp_path)
     if case == "missing-object":
@@ -146,7 +148,7 @@ def test_rejects_unavailable_comparison(
     ):
         pytest.fail("Unavailable comparison entered analysis")
 
-    assert error.value.kind == "input"
+    assert error.value.kind == kind
 
 
 @pytest.mark.parametrize("consumer_fails", [False, True], ids=["exit", "error"])

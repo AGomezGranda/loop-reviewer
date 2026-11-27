@@ -1,16 +1,24 @@
+import json
 from dataclasses import replace
+from pathlib import Path
 from typing import override
 
 import pytest
 
+from loop_reviewer.reviewer.integrations.git_inventory import open_local_comparison
+from loop_reviewer.reviewer.integrations.python_analyzer import CpythonAnalyzer
+from loop_reviewer.reviewer.inventory import validated_inventory
+from loop_reviewer.reviewer.inventory_contract import PinnedComparison
 from loop_reviewer.reviewer.local_evidence import EvidenceIndex, LocalEvidenceWork
 from loop_reviewer.reviewer.pinned_source import PinnedTextBlob
 from loop_reviewer.reviewer.python_context import PythonAnalysis
 from loop_reviewer.reviewer.semantic_inputs import (
     FrozenHunk,
     build_diff_bundle,
+    build_full_bundle,
     build_targeted_bundle,
 )
+from tests.support.inventory_git import PATH_ENV, commit, init, revision
 from tests.test_local_checks import PINS, SharedCallerAnalyzer, SharedCallerSource
 
 
@@ -102,3 +110,32 @@ def test_diff_bundle_retains_frozen_bytes_and_selects_frozen_order() -> None:
     assert all(entry.file_ids for entry in bundle.excerpts)
     with pytest.raises(ValueError, match="byte limit"):
         build_diff_bundle(PINS, rows, artifact, tuple(hunks), 1)
+
+
+def test_bundle_serializes_an_enclosing_caller_once(tmp_path: Path) -> None:
+    init(tmp_path)
+    producer = tmp_path / "producer.py"
+    producer.write_text("def load():\n    return 1\n")
+    (tmp_path / "consumer.py").write_text(
+        "from producer import load\ndef run():\n    pass\n    pass\n    load()\n"
+        + "    pass\n" * 8
+        + "    load()\n"
+        + "    pass\n" * 4
+        + "    return 1\n"
+    )
+    commit(tmp_path)
+    base = revision(tmp_path, "HEAD")
+    producer.write_text("def load():\n    return 2\n")
+    commit(tmp_path)
+    pins = PinnedComparison(merge_base=base, head=revision(tmp_path, "HEAD"))
+
+    with open_local_comparison(tmp_path, pins, PATH_ENV) as source:
+        rows = validated_inventory(source, pins)
+        work = LocalEvidenceWork(source, CpythonAnalyzer(), pins, lambda: 0, 30)
+        bundle = build_full_bundle(pins, rows, work, EvidenceIndex(), 64 * 1024)
+    excerpts = json.loads(bundle.evidence_text)["excerpts"]
+    assert [item["id"] for item in excerpts] == [
+        item.source.id for item in bundle.excerpts
+    ]
+    (caller,) = [item for item in excerpts if item["range"]["path"] == "consumer.py"]
+    assert caller["text"].count("load()") == 2

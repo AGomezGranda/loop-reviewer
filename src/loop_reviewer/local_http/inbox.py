@@ -18,6 +18,11 @@ from loop_reviewer.inbox.model import (
     WatchedRepositoryKey,
 )
 from loop_reviewer.inbox.store import InboxRowTarget
+from loop_reviewer.local_http.launches import (
+    LaunchReceipt,
+    ReviewLaunches,
+    ReviewRequest,
+)
 from loop_reviewer.local_http.models import (
     ApiError,
     DecimalId,
@@ -195,6 +200,8 @@ def routes(
     actions: InboxActions[ReviewOutcome],
     history: ReviewHistory,
     watch: BrowserWatch,
+    review: ReviewRequest,
+    launches: ReviewLaunches,
 ) -> APIRouter:
     router = APIRouter(prefix="/inbox", route_class=JsonBodyRoute)
 
@@ -232,6 +239,21 @@ def routes(
         ref, expected = body.target()
         _, result = actions.open(ref, expected_target=expected)
         return open_outcome(result, history)
+
+    @router.post("/launch", status_code=202)
+    def launch_row(body: RowAction) -> LaunchReceipt:
+        ref, expected = body.target()
+        return launches.submit(
+            ("inbox", expected),
+            lambda observe: actions.open(
+                ref,
+                expected_target=expected,
+                review=lambda selected, identity: review(
+                    selected, expected_identity=identity, observe_selection=observe
+                ),
+            )[1],
+            url=ref.url,
+        )
 
     @router.post("/later")
     def defer_row(body: RowAction) -> InboxResponse:

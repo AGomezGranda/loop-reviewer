@@ -48,6 +48,19 @@ class ReviewIdentityMismatch(Exception):
         )
 
 
+class ReviewRetryChanged(Exception):
+    def __init__(self) -> None:
+        super().__init__(
+            "The saved attempt or its comparison changed. Check Reviews for the current status."
+        )
+
+
+@dataclass(frozen=True)
+class RetryTarget:
+    run_id: int
+    key: ReviewKey
+
+
 class SavedDraftInterrupted(KeyboardInterrupt):
     def __init__(self, run_id: int) -> None:
         super().__init__()
@@ -116,20 +129,29 @@ class ReviewPullRequest:
         *,
         retry: bool = False,
         expected_identity: ReviewIdentity | None = None,
+        observe_selection: Callable[[ReviewSelection], None] | None = None,
+        retry_target: RetryTarget | None = None,
     ) -> ReviewOutcome:
         account, pull_request = self._reader.read_pull_request(ref)
         identity = ReviewIdentity.for_pull_request(pull_request.ref, account)
+        if retry_target is not None and retry_target.key.identity != identity:
+            raise ReviewRetryChanged
         if expected_identity is not None and identity != expected_identity:
             raise ReviewIdentityMismatch
         if (history := self._history(identity)) is not None:
             return history
         selection = select_revision(account, pull_request, self._reader)
         key = selection.key
-        latest = self._store.latest(key)
-        if latest is not None and latest.status == "draft_ready":
-            return self._history(identity) or DraftReview(
-                "resumed", latest.saved_draft()
-            )
+        if retry_target is not None and retry_target.key != key:
+            raise ReviewRetryChanged
+        if observe_selection is not None:
+            observe_selection(selection)
+        if retry_target is None:
+            latest = self._store.latest(key)
+            if latest is not None and latest.status == "draft_ready":
+                return self._history(identity) or DraftReview(
+                    "resumed", latest.saved_draft()
+                )
 
         saved: SavedDraft | None = None
         try:
@@ -138,7 +160,11 @@ class ReviewPullRequest:
                     return history
                 if reviewer is None:
                     return UnavailableReview("in_progress")
-                attempt = self._prepare_attempt(selection, retry=retry)
+                attempt = self._prepare_attempt(
+                    selection,
+                    retry=retry or retry_target is not None,
+                    target=retry_target,
+                )
                 if not isinstance(attempt, ReviewRun):
                     return attempt
                 try:
@@ -167,9 +193,15 @@ class ReviewPullRequest:
             raise
 
     def _prepare_attempt(
-        self, selection: ReviewSelection, *, retry: bool
+        self, selection: ReviewSelection, *, retry: bool, target: RetryTarget | None
     ) -> ReviewRun | ReviewOutcome:
         current = self._store.latest(selection.key)
+        if target is not None and (
+            current is None
+            or current.id != target.run_id
+            or current.status == "draft_ready"
+        ):
+            raise ReviewRetryChanged
         action, abandoned = prepare_unlocked_attempt(current, retry=retry)
         if abandoned is not None:
             self._store.save(abandoned)

@@ -14,6 +14,8 @@ The local OS account is the trust boundary. Switching `gh` accounts doesn’t hi
 
 Keep the state directory on a local filesystem on macOS or Linux for process locking. The selection-only `open` command doesn’t need these locks. The `inbox-watch/` subdirectory is disposable polling metadata. Remove it only after all browser servers, terminal watchers, and scans have stopped.
 
+Each workspace server shares two review workers and up to 32 waiting launches across its tabs. Refreshing or closing a tab preserves the queue and recent launch notices while the server is running. A graceful shutdown drops waiting launches and lets started reviews finish. On restart, **Reviews** reads saved attempts and drafts from SQLite. An attempt whose process lock has cleared after an interruption requires an explicit retry. The CLI and browser share the per-comparison lock.
+
 ## Repository renames
 
 Reviews saved with a stable GitHub repository ID can be reopened at the new URL after a rename. Legacy records saved with only a repository name aren’t matched by URL: the old name may now belong to another repository. Legacy drafts remain reachable by run ID until completion, and repeating `draft finish` with the original run ID and version still shows an existing completion.

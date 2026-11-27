@@ -4,7 +4,7 @@ Follow the [quickstart](../README.md#quickstart) to install the tool. In these e
 
 ## Open or resume a private draft
 
-**Browser:** Run `loop-reviewer ui`, paste a PR URL, and select **Open review**. If the browser doesn’t open automatically, use the launch link printed in the terminal. The session survives a page refresh; start a new `loop-reviewer ui` session for another browser. Press Ctrl-C in the launching terminal to stop the server after in-flight work settles. Keep the launch link private: it grants access to the local workspace.
+**Browser.** Run `loop-reviewer ui`, paste a PR URL, and select **Open review**, or launch from an Inbox row. Continue using the workspace while the review runs. Select **Reviews** to see its status, then **Open draft** when it’s ready. If the browser doesn’t open automatically, use the launch link printed in the terminal. The session survives a page refresh. Keep the launch link private because it grants access to the local workspace.
 
 **CLI:** Replace the sample URL with an open, non-draft PR you can access:
 
@@ -16,9 +16,9 @@ loop-reviewer review "$PR_URL"  # Generate or resume a private draft.
 
 Neither operation posts to GitHub. You don’t need an [inbox](inbox.md) to review a PR by URL. Selecting or reviewing uses the standard GitHub API endpoint for the PR host, not custom `gh` `api_host` overrides. Each selection uses a single captured GitHub credential.
 
-A draft is pinned to the target branch, merge base, and head commit. Reopening the same current comparison under the same GitHub account resumes the saved draft without rerunning analysis or checking model configuration, but still needs access to the PR on GitHub. If the PR advances before completion, reopening can start a separate draft for the new comparison. The old draft remains pinned to its revision and accessible by run ID. There’s no draft list.
+A draft is pinned to the target branch, merge base, and head commit. Reopening the same current comparison under the same GitHub account resumes the saved draft without rerunning analysis or checking model configuration, but still needs access to the PR on GitHub. If the PR advances before completion, reopening can start a separate draft for the new comparison. The old draft remains pinned to its revision and accessible in **Reviews** or by run ID.
 
-Use **Retry review** when the browser offers it, or `loop-reviewer review --retry "$PR_URL"`, to replace a failed or interrupted attempt for the same comparison. If the comparison itself was unsupported, run `review` without `--retry` once a supported revision is available. If the CLI says it saved a draft but couldn’t check history, use the printed `draft show RUN_ID` command to check its status.
+Use **Retry review** in **Reviews**, or `loop-reviewer review --retry "$PR_URL"`, to replace a failed or interrupted attempt for the same comparison. If the comparison changed, submit the PR again to review the current revision. If the CLI says it saved a draft but couldn’t check history, use the printed `draft show RUN_ID` command to check its status.
 
 ## Edit or copy feedback
 

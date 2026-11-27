@@ -1,14 +1,23 @@
 """Open, read, edit, copy and finish private reviews."""
 
-from collections.abc import Callable
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Body, Path
+from fastapi import APIRouter, Body, Depends, Path
 from pydantic import Field
 
 from loop_reviewer.local_http.history import CompletionDetail
+from loop_reviewer.local_http.launches import (
+    CompletionResult,
+    DraftResult,
+    LaunchReceipt,
+    LaunchSource,
+    ReviewLaunches,
+    ReviewRequest,
+    RevisionChanges,
+)
 from loop_reviewer.local_http.models import (
     ApiError,
+    ErrorResponse,
     Feedback,
     FeedbackResponse,
     Position,
@@ -18,19 +27,22 @@ from loop_reviewer.local_http.models import (
     SelectionResponse,
     SQLiteId,
 )
-from loop_reviewer.local_http.session import JsonBodyRoute
+from loop_reviewer.local_http.session import JsonBodyRoute, require_empty_body
+from loop_reviewer.review.active import ActiveReview, ActiveReviews, ActiveStatus
 from loop_reviewer.review.drafts import EditReviewDraft
 from loop_reviewer.review.feedback import feedback_markdown
 from loop_reviewer.review.generate import (
     DraftReview,
     FailedReview,
     FinishedReview,
+    RetryTarget,
     ReviewOutcome,
 )
 from loop_reviewer.review.history import ReviewHistory
 from loop_reviewer.review.model import (
     DraftTarget,
     ReviewerFailureKind,
+    ReviewIdentity,
     SavedDraft,
     SelectionChange,
 )
@@ -38,9 +50,111 @@ from loop_reviewer.review.pull_request import PullRequestRef
 from loop_reviewer.reviewer.full_review_contract import FullReviewResult
 
 
-class OpenReview(RequestModel):
+class LaunchReview(RequestModel):
     url: PullRequestURL
+
+
+class OpenReview(LaunchReview):
     retry: bool = False
+
+
+class SavedReviewRow(ResponseModel):
+    kind: Literal["saved"] = "saved"
+    run_id: SQLiteId
+    selection: SelectionResponse
+    status: ActiveStatus | Literal["queued"]
+    failure: str | None
+    failure_kind: ReviewerFailureKind | None
+    publication_id: str | None
+    changes: RevisionChanges = ()
+
+    @classmethod
+    def from_active(cls, active: ActiveReview) -> SavedReviewRow:
+        run = active.run
+        return cls(
+            run_id=str(run.id),
+            selection=SelectionResponse.from_selection(run.selection),
+            status=active.status,
+            failure=run.failure,
+            failure_kind=run.failure_kind,
+            publication_id=run.publication_id.value if run.publication_id else None,
+        )
+
+
+class LaunchReviewRow(ResponseModel):
+    kind: Literal["launch"] = "launch"
+    launch_id: str
+    url: str
+    source: LaunchSource
+    selection: SelectionResponse | None
+    status: Literal["queued", "running", "failed", "completed"]
+    error: ErrorResponse | None = None
+    completed_run_id: SQLiteId | None = None
+
+
+ReviewRow = Annotated[SavedReviewRow | LaunchReviewRow, Field(discriminator="kind")]
+
+
+def review_rows(active: ActiveReviews, launches: ReviewLaunches) -> list[ReviewRow]:
+    snapshot = launches.snapshot()
+    saved = {
+        item.run.selection.key: SavedReviewRow.from_active(item)
+        for item in active.list()
+    }
+    transient: list[LaunchReviewRow] = []
+    completed: dict[ReviewIdentity, bool] = {}
+    for launch in snapshot:
+        selection = launch.selection
+        key = selection.key if selection is not None else None
+        row = saved.get(key) if key is not None else None
+        result = launch.result
+        if isinstance(result, DraftResult) and row is None:
+            continue
+        if selection is not None:
+            identity = selection.identity
+            if identity not in completed:
+                completed[identity] = active.completed_run_id(identity) is not None
+                if completed[identity]:
+                    saved = {
+                        key: item
+                        for key, item in saved.items()
+                        if key.identity != identity
+                    }
+            if completed[identity] and not isinstance(result, CompletionResult):
+                continue
+        if launch.status != "settled":
+            if row is not None:
+                if launch.retry_run_id == int(row.run_id) and row.status in (
+                    "failed",
+                    "interrupted",
+                ):
+                    row.status = launch.status
+                continue
+            status = launch.status
+        elif isinstance(result, DraftResult):
+            if row is not None and row.run_id == str(result.run_id) and not row.changes:
+                row.changes = result.changes
+            continue
+        elif isinstance(result, CompletionResult):
+            status = "completed"
+        else:
+            status = "failed"
+        transient.append(
+            LaunchReviewRow(
+                launch_id=launch.receipt.launch_id,
+                url=selection.ref.url if selection is not None else launch.url,
+                source=launch.source,
+                selection=SelectionResponse.from_selection(selection)
+                if selection is not None
+                else None,
+                status=status,
+                completed_run_id=str(result.run_id)
+                if isinstance(result, CompletionResult)
+                else None,
+                error=result if isinstance(result, ErrorResponse) else None,
+            )
+        )
+    return [*transient, *saved.values()]
 
 
 class DraftResponse(ResponseModel):
@@ -152,15 +266,61 @@ def parse_pr(url: str) -> PullRequestRef:
 
 
 def routes(
-    review: Callable[[PullRequestRef, bool], ReviewOutcome],
+    review: ReviewRequest,
     drafts: EditReviewDraft,
     history: ReviewHistory,
+    active: ActiveReviews,
+    launches: ReviewLaunches,
 ) -> APIRouter:
     router = APIRouter(route_class=JsonBodyRoute)
 
     @router.post("/reviews/open")
     def open_review(body: OpenReview) -> OpenOutcome:
-        return open_outcome(review(parse_pr(body.url), body.retry), history)
+        return open_outcome(review(parse_pr(body.url), retry=body.retry), history)
+
+    @router.get("/reviews")
+    def list_reviews() -> list[ReviewRow]:
+        return review_rows(active, launches)
+
+    @router.post("/reviews/launches", status_code=202)
+    def launch_review(body: LaunchReview) -> LaunchReceipt:
+        ref = parse_pr(body.url)
+        return launches.submit(
+            ("url", ref),
+            lambda observe: review(ref, observe_selection=observe),
+            url=ref.url,
+        )
+
+    @router.post(
+        "/reviews/{runId}/retry",
+        status_code=202,
+        dependencies=[Depends(require_empty_body)],
+    )
+    def retry_review(run_id: Annotated[SQLiteId, Path(alias="runId")]) -> LaunchReceipt:
+        id = int(run_id)
+        key: tuple[Literal["retry"], int] = ("retry", id)
+        if (pending := launches.pending(key)) is not None:
+            return pending
+        item = active.by_id(id)
+        if item is None or item.status not in ("failed", "interrupted"):
+            if (pending := launches.pending(key)) is not None:
+                return pending
+            raise ApiError(
+                409,
+                "review_unavailable",
+                "This attempt is no longer available to retry.",
+            )
+        selection = item.run.selection
+        target = RetryTarget(id, selection.key)
+        return launches.submit(
+            key,
+            lambda observe: review(
+                selection.ref, observe_selection=observe, retry_target=target
+            ),
+            url=selection.ref.url,
+            selection=selection,
+            retry_run_id=id,
+        )
 
     @router.get("/drafts/{runId}")
     def get_draft(run_id: Annotated[SQLiteId, Path(alias="runId")]) -> DraftResponse:

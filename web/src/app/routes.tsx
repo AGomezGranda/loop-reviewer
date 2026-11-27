@@ -22,9 +22,11 @@ import {
 } from "@/features/publication/publication-screen";
 import { DraftScreen } from "@/features/review/draft-screen";
 import { draftKey, draftQuery } from "@/features/review/review-queries";
+import { reviewsQuery } from "@/features/reviews/reviews-queries";
+import { ReviewsScreen } from "@/features/reviews/reviews-screen";
 import { SetupScreen } from "@/features/setup/setup-screen";
-import { useReviewNavigation, useRouteNavigation } from "./review-navigation";
-import { WorkspaceLayout } from "./workspace-layout";
+import { useReviewLaunch, useRouteNavigation } from "./review-navigation";
+import { ReviewsLink, WorkspaceLayout } from "./workspace-layout";
 
 const linkStyle =
 	"wrap-anywhere text-sm text-primary underline underline-offset-4";
@@ -33,7 +35,8 @@ function InboxRoute() {
 	const status = useOutletContext<string>();
 	return (
 		<InboxScreen
-			onOpened={useReviewNavigation()}
+			onAccepted={useReviewLaunch()}
+			reviewsLink={<ReviewsLink />}
 			disconnected={status === "disconnected"}
 			setupLink={
 				<Link className={linkStyle} to="/setup">
@@ -74,6 +77,21 @@ function completionLink(id: string) {
 	);
 }
 
+function ReviewsRoute() {
+	return (
+		<ReviewsScreen
+			onRetried={useReviewLaunch()}
+			draftLink={(id, notice) => (
+				<Link className={linkStyle} to={`/drafts/${id}`} state={{ notice }}>
+					Open draft
+				</Link>
+			)}
+			historyLink={completionLink}
+			recoveryLink={recoveryLink}
+		/>
+	);
+}
+
 function DraftRoute() {
 	const { runId = "" } = useParams();
 	const navigate = useRouteNavigation();
@@ -88,6 +106,7 @@ function DraftRoute() {
 			onChanged={() => {
 				void cache.invalidateQueries({ queryKey: inboxQuery.queryKey });
 				void cache.invalidateQueries({ queryKey: historyKey });
+				void cache.invalidateQueries({ queryKey: reviewsQuery.queryKey });
 			}}
 			historyLink={(id) => (
 				<Link className={linkStyle} to={`/history/${id}`}>
@@ -163,6 +182,7 @@ function PublicationRoute() {
 				void cache.invalidateQueries({ queryKey: draftKey });
 				void cache.invalidateQueries({ queryKey: historyKey });
 				void cache.invalidateQueries({ queryKey: inboxQuery.queryKey });
+				void cache.invalidateQueries({ queryKey: reviewsQuery.queryKey });
 			}}
 			draftLink={(id) => (
 				<Link className={linkStyle} to={`/drafts/${id}`}>
@@ -182,6 +202,7 @@ export function createWorkspaceRouter() {
 			children: [
 				{ index: true, loader: () => redirect("/inbox") },
 				{ path: "inbox", Component: InboxRoute },
+				{ path: "reviews", Component: ReviewsRoute },
 				{ path: "setup", Component: SetupRoute },
 				{ path: "drafts/:runId", Component: DraftRoute },
 				{ path: "history", Component: HistoryRoute },

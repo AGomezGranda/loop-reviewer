@@ -1,12 +1,14 @@
 """Define the persistence contracts for review runs, drafts, and completions."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from loop_reviewer.review.model import (
     CompletedReview,
     DraftTarget,
     PublicationReceipt,
+    ReviewerFailureKind,
     ReviewIdentity,
     ReviewKey,
     ReviewRun,
@@ -23,6 +25,24 @@ from loop_reviewer.review.publication_model import (
 
 class CompletionReader(Protocol):
     def completed(self, identity: ReviewIdentity) -> CompletedReview | None: ...
+
+
+@dataclass(frozen=True)
+class UnfinishedReview:
+    id: int
+    selection: ReviewSelection
+    status: RunStatus
+    failure: str | None
+    failure_kind: ReviewerFailureKind | None
+    publication_id: PublicationId | None
+
+
+class UnfinishedReviewReader(Protocol):
+    def unfinished(self) -> tuple[UnfinishedReview, ...]: ...
+
+    def unfinished_by_id(self, run_id: int) -> UnfinishedReview | None: ...
+
+    def completed_run_id(self, identity: ReviewIdentity) -> int | None: ...
 
 
 class PublicationStore(CompletionReader, Protocol):

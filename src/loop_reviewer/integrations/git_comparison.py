@@ -30,10 +30,6 @@ resource.setrlimit(resource.RLIMIT_FSIZE, (size, size))
 signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
 os.execvp(sys.argv[2], sys.argv[2:])
 """
-_UNAVAILABLE = (
-    "The selected comparison is no longer available from GitHub. "
-    "Select the pull request again with open."
-)
 _PREPARATION_FAILED = (
     "Could not prepare the selected comparison from GitHub. Check access and try again."
 )
@@ -104,7 +100,9 @@ class GitComparison:
             raise ReviewerError(_PREPARATION_FAILED, "failed")
         for sha, expression, result in zip(commits, expressions, objects, strict=True):
             if result == f"{expression} missing".encode("ascii"):
-                raise ReviewerError(_UNAVAILABLE, "input")
+                raise ReviewerError(
+                    "A pinned commit was missing from the GitHub fetch.", "failed"
+                )
             if result != f"{sha} commit".encode("ascii"):
                 raise ReviewerError(_PREPARATION_FAILED, "failed")
         self._run(

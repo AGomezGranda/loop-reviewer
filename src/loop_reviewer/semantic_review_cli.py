@@ -81,13 +81,15 @@ def main() -> int:
             )
     environment = {"PATH": os.environ.get("PATH", os.defpath)}
     model = None
-    if args.allow_provider and budget.max_model_spend_usd_micros:
-        if args.report_version == 5 and QUALIFIED_PROFILE is not None:
-            key = os.environ.get("OPENAI_API_KEY", "")
-            if key:
-                model = OpenAIReview(key, profile=QUALIFIED_PROFILE)
-        elif args.report_version != 5:
-            model = OpenAIReview("")
+    if (
+        args.allow_provider
+        and budget.max_model_spend_usd_micros
+        and args.report_version == 5
+        and QUALIFIED_PROFILE is not None
+    ):
+        key = os.environ.get("OPENAI_API_KEY", "")
+        if key:
+            model = OpenAIReview(key, profile=QUALIFIED_PROFILE)
 
     def open_source(pins: PinnedComparison):
         return open_local_comparison(args.repo, pins, environment)

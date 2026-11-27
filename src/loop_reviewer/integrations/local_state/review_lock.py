@@ -19,6 +19,14 @@ def _lock_name(key: ReviewKey) -> str:
     return f"{name}.lock"
 
 
+def review_lock_held(lock_dir: Path, key: ReviewKey) -> bool | None:
+    try:
+        with private_lock(lock_dir, _lock_name(key), shared=True) as descriptor:
+            return descriptor is None
+    except LocalLockError:
+        return None
+
+
 class LockedReviewExecution:
     def __init__(
         self, lock_dir: Path, reviewer_factory: Callable[[int], Reviewer]

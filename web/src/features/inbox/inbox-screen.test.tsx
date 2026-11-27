@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { InboxReport } from "./inbox-queries";
@@ -41,7 +41,8 @@ function mount() {
 			}
 		>
 			<InboxScreen
-				onOpened={() => undefined}
+				onAccepted={() => "Review submitted."}
+				reviewsLink={<a href="/reviews">View Reviews</a>}
 				setupLink={<a href="/setup">Setup</a>}
 			/>
 		</QueryClientProvider>,
@@ -74,6 +75,65 @@ test.each([
 	);
 	mount();
 	await screen.findByText(message);
+});
+
+test("launches a second row while the first request is pending", async () => {
+	const rows = ["1", "2"].map((number) => ({
+		title: `Pull request ${number}`,
+		url: `https://github.com/org/repo/pull/${number}`,
+		repository: "org/repo",
+		identity: {
+			host: "github.com",
+			repositoryId: "44",
+			number,
+			account: "alice",
+		},
+		author: "bob",
+		stale: false,
+		reasons: ["Your review was requested"],
+		lastSaved: null,
+	}));
+	let acceptFirst!: (response: Response) => void;
+	const firstReceipt = new Promise<Response>((resolve) => {
+		acceptFirst = resolve;
+	});
+	const send = vi.fn(async (path: string, init: RequestInit) => {
+		if (path.endsWith("/launch")) {
+			const body = JSON.parse(String(init.body));
+			return body.url === rows[0].url
+				? firstReceipt
+				: Response.json({ launchId: "second" }, { status: 202 });
+		}
+		return Response.json({ ...report, active: rows });
+	});
+	vi.stubGlobal("fetch", send);
+	mount();
+	const user = userEvent.setup();
+	const heading = await screen.findByRole("heading", {
+		name: "Pull request 1",
+	});
+	const row = heading.closest("li");
+	if (!row) throw new Error("Inbox row missing");
+	const first = within(row);
+	const buttons = screen.getAllByRole<HTMLButtonElement>("button", {
+		name: "Open review",
+	});
+	await user.click(buttons[0]);
+	expect(buttons[0].disabled).toBe(true);
+	expect(buttons[1].disabled).toBe(false);
+	expect(
+		first.getByRole<HTMLButtonElement>("button", { name: "Later" }).disabled,
+	).toBe(false);
+	expect(
+		screen.getByRole<HTMLButtonElement>("button", { name: "Scan now" })
+			.disabled,
+	).toBe(false);
+	await user.click(buttons[1]);
+	await screen.findByRole("link", { name: "View Reviews" });
+	expect(
+		send.mock.calls.filter(([path]) => path.endsWith("/launch")),
+	).toHaveLength(2);
+	acceptFirst(Response.json({ launchId: "first" }, { status: 202 }));
 });
 
 test("Later and Restore submit the identity and settings version displayed with the row", async () => {
