@@ -31,6 +31,7 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 			expect(JSON.parse(String(init.body))).toEqual({
 				settingsVersion: "1",
 				configRevision: "original",
+				excludedTitleTerms: ["translation"],
 				jiraProjectKeys: ["xyz"],
 				repositoryUrls: [first, second],
 			});
@@ -43,6 +44,7 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 			return Response.json({
 				settingsVersion: "2",
 				configRevision: "saved",
+				excludedTitleTerms: ["translation"],
 				jiraProjectKeys: ["XYZ"],
 				repositoryUrls: [first, second],
 			});
@@ -61,6 +63,9 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 	expect(projects).toHaveProperty("value", "ABC");
 	expect(repositories).toHaveProperty("value", first);
 	expect(screen.queryByLabelText("Pi reviewer model")).toBeNull();
+	const terms = screen.getByLabelText("Exclude PR titles containing");
+	expect(terms).toHaveProperty("value", "");
+	await user.type(terms, "translation");
 	await user.clear(projects);
 	await user.type(projects, " xyz ");
 	await user.click(screen.getByRole("button", { name: "Add repository" }));
@@ -80,6 +85,7 @@ test("edits saved settings, keeps inputs on failure, and shows the saved values"
 	await user.click(save);
 	await screen.findByText("Watching 2 repositories for XYZ.");
 	expect(projects).toHaveProperty("value", "XYZ");
+	expect(terms).toHaveProperty("value", "translation");
 	expect(onSaved).toHaveBeenCalledOnce();
 });
 
@@ -89,6 +95,7 @@ test("uses refreshed settings while pristine and explicitly reloads after an edi
 	let current = {
 		settingsVersion: "2",
 		configRevision: "current",
+		excludedTitleTerms: ["release\nnotes"],
 		jiraProjectKeys: ["NEW"],
 		repositoryUrls,
 	};
@@ -98,6 +105,7 @@ test("uses refreshed settings while pristine and explicitly reloads after an edi
 		vi.fn(async (_url: string, init: RequestInit) => {
 			if (init.method === "GET") return Response.json(current);
 			const body = JSON.parse(String(init.body));
+			expect(body).not.toHaveProperty("excludedTitleTerms");
 			sent.push(body.configRevision);
 			if (body.configRevision !== current.configRevision) {
 				return Response.json(

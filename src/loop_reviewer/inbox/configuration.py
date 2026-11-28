@@ -17,28 +17,32 @@ class LocalSettings:
     addresses: tuple[RepositoryAddress, ...]
     version: int | None
     revision: str
+    excluded_title_terms: tuple[str, ...] = ()
 
 
-type InboxInputs = tuple[tuple[JiraProjectKey, ...], tuple[RepositoryAddress, ...]]
+type InboxInputs = tuple[
+    tuple[JiraProjectKey, ...], tuple[RepositoryAddress, ...], tuple[str, ...]
+]
+
+
+def normalize_excluded_title_terms(terms: tuple[str, ...]) -> tuple[str, ...]:
+    unique: dict[str, str] = {}
+    for term in terms:
+        if "\n" in term or "\r" in term:
+            raise ValueError("Enter each excluded title term on a single line.")
+        if stripped := term.strip():
+            unique.setdefault(stripped.casefold(), stripped)
+    return tuple(unique.values())
 
 
 def saved_inbox_inputs(saved: InboxSettings | None) -> InboxInputs:
     if saved is None:
-        return (), ()
-    return saved.projects, tuple(repo.address for repo in saved.repositories)
-
-
-def verify_inbox_on_save(
-    requested: InboxInputs,
-    current: LocalSettings,
-) -> bool:
-    if not any(requested):
-        if current.projects:
-            raise ValueError(
-                "Configure a Jira project key and at least one repository."
-            )
-        return False
-    return True
+        return (), (), ()
+    return (
+        saved.projects,
+        tuple(repo.address for repo in saved.repositories),
+        saved.excluded_title_terms,
+    )
 
 
 class ConfigureLocal(Protocol):
@@ -49,6 +53,7 @@ class ConfigureLocal(Protocol):
         projects: tuple[JiraProjectKey, ...],
         addresses: tuple[RepositoryAddress, ...],
         *,
+        excluded_title_terms: tuple[str, ...] | None = None,
         expected_version: int | None = None,
         expected_revision: str | None = None,
     ) -> LocalSettings: ...

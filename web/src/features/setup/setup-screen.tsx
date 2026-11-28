@@ -6,6 +6,8 @@ import type { components } from "@/api/schema";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+import { Textarea } from "@/components/ui/textarea";
+
 type Configuration = components["schemas"]["InboxConfiguration"];
 const configurationKey = ["inbox-configuration"];
 
@@ -26,6 +28,7 @@ function SetupForm({
 		() => ({
 			version: initial.settingsVersion,
 			revision: initial.configRevision,
+			terms: initial.excludedTitleTerms?.join("\n") ?? "",
 			project: initial.jiraProjectKeys.join(", "),
 			repositories: (initial.repositoryUrls.length
 				? initial.repositoryUrls
@@ -35,9 +38,9 @@ function SetupForm({
 		[initial],
 	);
 	const [edits, setEdits] = useState<typeof pristine | null>(null);
-	const { version, revision, project, repositories } = edits ?? pristine;
+	const { version, revision, project, terms, repositories } = edits ?? pristine;
 	const hasInbox =
-		Boolean(pristine.project || project.trim()) ||
+		Boolean(pristine.project || project.trim() || terms.trim()) ||
 		repositories.some((row) => row.url.trim());
 	const [focusRow, setFocusRow] = useState<string>();
 	const save = useMutation({
@@ -62,9 +65,11 @@ function SetupForm({
 			save.error.details.code === "inbox_changed");
 	const busy = save.isPending || reload.isPending;
 	function change(
-		fields: Partial<Pick<typeof pristine, "project" | "repositories">>,
+		fields: Partial<
+			Pick<typeof pristine, "project" | "terms" | "repositories">
+		>,
 	) {
-		setEdits({ version, revision, project, repositories, ...fields });
+		setEdits({ version, revision, project, terms, repositories, ...fields });
 		if (!conflict) save.reset();
 	}
 
@@ -77,6 +82,8 @@ function SetupForm({
 				save.mutate({
 					settingsVersion: version,
 					configRevision: revision,
+					excludedTitleTerms:
+						terms === pristine.terms ? undefined : terms.split("\n"),
 					jiraProjectKeys: hasInbox ? [project.trim()] : [],
 					repositoryUrls: hasInbox
 						? repositories.map((row) => row.url.trim())
@@ -205,6 +212,24 @@ function SetupForm({
 					onChange={(event) => {
 						change({ project: event.target.value });
 					}}
+				/>
+			</div>
+
+			<div className="space-y-2 border-t px-4 py-3">
+				<label className="text-sm font-medium" htmlFor="excluded-terms">
+					Exclude PR titles containing
+				</label>
+				<p id="terms-help" className="text-xs text-muted-foreground">
+					Enter one word or phrase per line. Matches ignore capitalization.
+				</p>
+				<Textarea
+					id="excluded-terms"
+					aria-describedby="terms-help"
+					placeholder="dependency update"
+					rows={2}
+					disabled={busy}
+					value={terms}
+					onChange={(event) => change({ terms: event.target.value })}
 				/>
 			</div>
 

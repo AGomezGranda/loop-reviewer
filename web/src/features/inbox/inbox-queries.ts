@@ -9,6 +9,10 @@ export type InboxResult =
 	| components["schemas"]["UnconfiguredInbox"];
 export type RowAction = components["schemas"]["RowAction"];
 
+export function isDirectlyRequested(row: InboxRowData) {
+	return row.reasonDetails.some((reason) => reason.code === "direct_request");
+}
+
 export const inboxQuery = queryOptions({
 	queryKey: ["inbox"],
 	queryFn: ({ signal }) => request("get", "/api/v1/inbox", { signal }),

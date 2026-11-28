@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from loop_reviewer.integrations.local_state.inbox_schema import (
+    add_inbox_scan_version,
+    add_title_exclusions,
     create_inbox_tables,
     rename_inbox_projects,
 )
@@ -22,6 +24,8 @@ _MIGRATIONS = (
     (8, rename_inbox_projects),
     (9, add_generation_metadata),
     (10, add_reviewer_report),
+    (11, add_title_exclusions),
+    (12, add_inbox_scan_version),
 )
 _SCHEMA_VERSION = _MIGRATIONS[-1][0]
 

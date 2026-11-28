@@ -14,7 +14,7 @@ from loop_reviewer.local_http.models import (
 )
 from loop_reviewer.review.history import ReviewHistory
 from loop_reviewer.review.model import CompletedReview
-from loop_reviewer.reviewer.full_review_contract import FullReviewResult
+from loop_reviewer.reviewer.hosted_report_contract import HostedReport
 
 
 class CompletionResponse(ResponseModel):
@@ -42,7 +42,7 @@ class CompletionResponse(ResponseModel):
 
 
 class CompletionDetail(CompletionResponse):
-    report: FullReviewResult | None
+    report: HostedReport | None
 
     @classmethod
     @override

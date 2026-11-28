@@ -51,7 +51,7 @@ Context is separate: excerpts and syntactic references are pinned evidence, not 
 
 ## Experimental standalone semantic review
 
-`loop-reviewer-semantic` uses the same local Git pins and runs compiler checks before optional behavior review. It needs no GitHub account or saved state and never executes reviewed code.
+`loop-reviewer-semantic` reviews the same local Git pins. It needs no GitHub account or saved state and never executes reviewed code.
 
 ```sh
 mise exec -- uv run --locked loop-reviewer-semantic \
@@ -60,13 +60,15 @@ mise exec -- uv run --locked loop-reviewer-semantic \
 
 The command writes one v5 JSON report by default. Exit **0** means complete, **1** is a typed failure, **2** is invalid arguments, and **3** is partial. A partial run retains every inventory row and any verified findings. The v5 behavior investigation covers selected regular UTF-8 text paths regardless of language, with a separate compiler check for Python. `mechanical` means the compiler check finished; it does not imply behavior was covered. Private leads and unfinished paths do not produce a `comment` recommendation on their own.
 
-Pass `--discussion-snapshot "$snapshot"` to include a trusted local capture in v5. To request an older format, pass `--report-version 3` without discussion or `--report-version 4` with a snapshot. The snapshot must match both pinned commits; the command does not check live GitHub ownership or need credentials. Snapshot files may contain confidential comments and replies. Keep them private, and do not commit or publish them. Reports include capture provenance, omissions, and bounded references, never discussion bodies or replies. Incomplete discussion can make the report partial even when all source checks finished.
+Opt in to `--report-version 6` to use the same pinned-text review as hosted drafts, without compiler checks. With zero allowance or no model, eligible files are unfinished and there are no behavioral findings. Versions 3–5 retain their existing behavior.
+
+Pass `--discussion-snapshot "$snapshot"` to include a trusted local capture in v5 or v6. To request an older format, pass `--report-version 3` without discussion or `--report-version 4` with a snapshot. The snapshot must match both pinned commits; the command does not check live GitHub ownership or need credentials. Snapshot files may contain confidential comments and replies. Keep them private, and do not commit or publish them. Reports include capture provenance, omissions, and bounded references, never discussion bodies or replies. Incomplete discussion can make the report partial even when all source checks finished.
 
 Use `loop-reviewer open "$pr_url" --discussion-snapshot "$snapshot"` to create that file from GitHub using the configured `gh` account. Use the printed merge base and head with the semantic command. The capture creates a private file at a new path and exits **0** for complete or **3** for partial capture. Unavailable capture exits **1** without creating the snapshot.
 
 A v4 `existing_thread` link replaces a finding only when an open, non-outdated thread with no replies matches the verified producer, caller, and exception. Its original location must resolve to the pinned producer excerpt. The pilot recognizes the explicit three-part claim, for example: `producer.items() returns [] instead of None. Call consumer.first(). consumer.first() raises IndexError.` Related history can be referenced without replacing a finding. An unanchored review or conversation item needs an explicit path immediately before an exact fenced source excerpt to be referenced. Discussion is never sent to the model.
 
-The default model allowance is zero. A positive `--max-model-spend-usd-micros` (maximum `3000000`) requires `--allow-provider`. The CLI reads `OPENAI_API_KEY` only for v5 when a qualified profile is configured and both consent and a positive allowance are present. **No OpenAI profile is qualified, so the command currently makes no provider calls even when opted in.** If a profile is qualified later, the provider would process the submitted pinned source; only opt in if you are authorized to send it. `store=false` is not a data-retention guarantee. Usage would be estimated at standard uncached rates, not an invoice, and unknown billing would hold the full reservation.
+The default model allowance is zero. A positive `--max-model-spend-usd-micros` (maximum `3000000`) requires `--allow-provider`. The CLI reads `OPENAI_API_KEY` only for v5 or v6 when a qualified profile is configured and both consent and a positive allowance are present. **No OpenAI profile is qualified, so the command currently makes no provider calls even when opted in.** If a profile is qualified later, the provider would process the submitted pinned source; only opt in if you are authorized to send it. `store=false` is not a data-retention guarantee. Usage would be estimated at standard uncached rates, not an invoice, and unknown billing would hold the full reservation.
 
 The local semantic witness is deliberately narrow: it checks simple direct Python source imports, constant empty-result changes, and a caller's indexing and guards. It does not establish general Python binding or behavior. See [the replay protocol](reviewer-replay.md) for the experimental status.
 

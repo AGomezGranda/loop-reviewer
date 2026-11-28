@@ -9,7 +9,13 @@ from urllib.parse import urlsplit
 from loop_reviewer.review.model import ReviewIdentity, RunStatus
 from loop_reviewer.review.pull_request import PullRequestRef
 
-_REQUESTED = "Your review was requested"
+type InboxReasonCode = Literal["direct_request", "authored", "jira_project"]
+
+
+@dataclass(frozen=True)
+class InboxReason:
+    code: InboxReasonCode
+    label: str
 
 
 @dataclass(frozen=True)
@@ -100,18 +106,20 @@ class DiscoveredPullRequest:
     draft: bool
     requested_users: tuple[str, ...]
 
+    opened_at: int | None = None
+
     def reasons(
         self, projects: tuple[JiraProjectKey, ...], account: str
-    ) -> tuple[str, ...]:
+    ) -> tuple[InboxReason, ...]:
         if self.state != "open" or self.draft:
             return ()
-        reasons: list[str] = []
+        reasons: list[InboxReason] = []
         if any(user.lower() == account.lower() for user in self.requested_users):
-            reasons.append(_REQUESTED)
+            reasons.append(InboxReason("direct_request", "Your review was requested"))
         if self.author.lower() == account.lower():
-            reasons.append("Your PR")
+            reasons.append(InboxReason("authored", "Your PR"))
         reasons.extend(
-            f"Matches {project.label}"
+            InboxReason("jira_project", f"Matches {project.label}")
             for project in projects
             if project.matches(self.title)
         )
@@ -122,19 +130,20 @@ class DiscoveredPullRequest:
 class InboxRow:
     identity: ReviewIdentity
     pull_request: DiscoveredPullRequest
-    reasons: tuple[str, ...]
+    reasons: tuple[InboxReason, ...]
     last_saved: RunStatus | None
     stale: bool
     deferred: bool = False
 
     @property
-    def order(self) -> tuple[bool, str, str, int]:
+    def order(self) -> tuple[bool, int, str, str, int]:
         ref = self.pull_request.ref
         return (
-            _REQUESTED not in self.reasons,
+            self.pull_request.opened_at is None,
+            -(self.pull_request.opened_at or 0),
             ref.host,
             f"{ref.owner}/{ref.repo}".casefold(),
-            ref.number,
+            -ref.number,
         )
 
 
@@ -143,6 +152,28 @@ class InboxSettings:
     projects: tuple[JiraProjectKey, ...]
     repositories: tuple[WatchedRepository, ...]
     version: int
+    scan_version: int
+    excluded_title_terms: tuple[str, ...] = ()
+
+    def reconfigured(
+        self,
+        projects: tuple[JiraProjectKey, ...],
+        repositories: tuple[WatchedRepository, ...],
+        excluded_title_terms: tuple[str, ...],
+    ) -> InboxSettings:
+        version = self.version + 1
+        scan_version = (
+            self.scan_version
+            if (projects, repositories) == (self.projects, self.repositories)
+            else version
+        )
+        return InboxSettings(
+            projects, repositories, version, scan_version, excluded_title_terms
+        )
+
+    def excludes(self, title: str) -> bool:
+        title = title.casefold()
+        return any(term.casefold() in title for term in self.excluded_title_terms)
 
     @property
     def prefix_label(self) -> str:

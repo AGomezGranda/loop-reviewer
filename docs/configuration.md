@@ -7,6 +7,7 @@ If `XDG_CONFIG_HOME` is an absolute path, Loop-reviewer uses
 ```toml
 [inbox]
 jira_project_key = "ABC"
+excluded_title_terms = ["translation"] # Optional, case-insensitive title matches
 repositories = [
     "https://github.com/ORG/REPO",
     "https://github.com/ORG/OTHER_REPO",
@@ -15,7 +16,8 @@ repositories = [
 
 Inbox setup is optional. It takes one shared Jira project key, such as `ABC`
 for PR titles that start with `[ABC-123]`, and one or more HTTPS repository
-URLs. Legacy `[reviewer]` values are ignored and preserved when saving.
+URLs. Each title exclusion is a single-line word or phrase. Legacy `[reviewer]`
+values are ignored and preserved when saving.
 
 ## Edit from the browser, CLI, or file
 
@@ -29,7 +31,9 @@ Loop-reviewer verifies repository access with `gh` before replacing the
 verified watch list in SQLite. If verification fails, correct the settings in
 **Setup** or in the file. A manual file edit that would switch GitHub accounts
 or replace the identity of a previously watched repository at the same URL
-requires an explicit save in **Setup** or `loop-reviewer inbox setup`.
+requires an explicit save in **Setup** or `loop-reviewer inbox setup`. Changing
+only title exclusions does not reverify or rebind the watch list; save again
+without changing exclusions if you intend to reverify it.
 
 Existing inboxes keep using the settings in SQLite until you save the inbox
 in **Setup**, rerun CLI setup, or add an `[inbox]` section. An absent

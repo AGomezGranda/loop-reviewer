@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { lazy, Suspense } from "react";
 import {
 	createBrowserRouter,
 	Link,
@@ -20,7 +21,6 @@ import {
 	PublicationScreen,
 	UnconfirmedPublications,
 } from "@/features/publication/publication-screen";
-import { DraftScreen } from "@/features/review/draft-screen";
 import { draftKey, draftQuery } from "@/features/review/review-queries";
 import { reviewsQuery } from "@/features/reviews/reviews-queries";
 import { ReviewsScreen } from "@/features/reviews/reviews-screen";
@@ -30,6 +30,12 @@ import { ReviewsLink, WorkspaceLayout } from "./workspace-layout";
 
 const linkStyle =
 	"wrap-anywhere text-sm text-primary underline underline-offset-4";
+
+const DraftScreen = lazy(() =>
+	import("@/features/review/draft-screen").then(({ DraftScreen }) => ({
+		default: DraftScreen,
+	})),
+);
 
 function InboxRoute() {
 	const status = useOutletContext<string>();
@@ -98,41 +104,47 @@ function DraftRoute() {
 	const { state } = useLocation();
 	const cache = useQueryClient();
 	return (
-		<DraftScreen
-			key={runId}
-			runId={runId}
-			openNotice={typeof state?.notice === "string" ? state.notice : undefined}
-			onFinished={(id) => void navigate(`/history/${id}`)}
-			onChanged={() => {
-				void cache.invalidateQueries({ queryKey: inboxQuery.queryKey });
-				void cache.invalidateQueries({ queryKey: historyKey });
-				void cache.invalidateQueries({ queryKey: reviewsQuery.queryKey });
-			}}
-			historyLink={(id) => (
-				<Link className={linkStyle} to={`/history/${id}`}>
-					Open completed review
-				</Link>
-			)}
-			recoveryLink={recoveryLink}
-			previewControl={(draft, disabled) => (
-				<PreviewControl
-					runId={draft.runId}
-					version={draft.version}
-					disabled={disabled}
-					warnPartial={
-						draft.report?.status === "partial" &&
-						draft.feedback.findings.length === 0
-					}
-					onConflict={() =>
-						void cache.invalidateQueries({
-							queryKey: draftQuery(runId).queryKey,
-						})
-					}
-					recoveryLink={recoveryLink}
-					onPreview={(preview) => void navigate(`/publications/${preview.id}`)}
-				/>
-			)}
-		/>
+		<Suspense fallback={<p role="status">Loading draft…</p>}>
+			<DraftScreen
+				key={runId}
+				runId={runId}
+				openNotice={
+					typeof state?.notice === "string" ? state.notice : undefined
+				}
+				onFinished={(id) => void navigate(`/history/${id}`)}
+				onChanged={() => {
+					void cache.invalidateQueries({ queryKey: inboxQuery.queryKey });
+					void cache.invalidateQueries({ queryKey: historyKey });
+					void cache.invalidateQueries({ queryKey: reviewsQuery.queryKey });
+				}}
+				historyLink={(id) => (
+					<Link className={linkStyle} to={`/history/${id}`}>
+						Open completed review
+					</Link>
+				)}
+				recoveryLink={recoveryLink}
+				previewControl={(draft, disabled) => (
+					<PreviewControl
+						runId={draft.runId}
+						version={draft.version}
+						disabled={disabled}
+						warnPartial={
+							draft.report?.status === "partial" &&
+							draft.feedback.findings.length === 0
+						}
+						onConflict={() =>
+							void cache.invalidateQueries({
+								queryKey: draftQuery(runId).queryKey,
+							})
+						}
+						recoveryLink={recoveryLink}
+						onPreview={(preview) =>
+							void navigate(`/publications/${preview.id}`)
+						}
+					/>
+				)}
+			/>
+		</Suspense>
 	);
 }
 

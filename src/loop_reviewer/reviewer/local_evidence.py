@@ -40,14 +40,46 @@ from loop_reviewer.reviewer.python_context import (
 )
 
 _TEXT_BYTES = 128 * 1024
+_HUNK_BYTES = 64 * 1024
 _SEARCH_BYTES = 64 * 1024
 _LIMITS = {"blob": 250, "analysis": 250, "hunk": 200, "search": 40}
+_VERIFICATION_READ_RESERVE = {"blob": 8, "search": 8}
 _Operation = Literal["blob", "analysis", "hunk", "search"]
 _PathKey = tuple[RevisionSide, str]
 
 
 class WorkLimit(Exception):
     pass
+
+
+@dataclass
+class OptionalRetrieval:
+    bytes_left: int
+    deadline: float | None = None
+
+    def read[T](
+        self,
+        cap: int,
+        fetch: Callable[[int], T | ReadFailure],
+        size: Callable[[T], int | None],
+    ) -> T | ReadFailure:
+        cap = min(cap, self.bytes_left)
+        if cap <= 0:
+            return "limit_reached"
+        try:
+            result = fetch(cap)
+        except WorkLimit:
+            result = "limit_reached"
+        actual = size(result) if not isinstance(result, str) else None
+        self.bytes_left -= cap if actual is None else actual
+        return "limit_reached" if actual is not None and actual > cap else result
+
+
+def _matches_inventory(blob: PinnedTextBlob, expected: FileSide | None) -> bool:
+    return expected is None or (blob.blob_id, len(blob.text)) == (
+        expected.object_id,
+        expected.blob_bytes,
+    )
 
 
 @dataclass
@@ -66,23 +98,69 @@ class PinnedEvidenceWork:
         default_factory=dict
     )
     lines: dict[_PathKey, tuple[str, ...]] = field(default_factory=dict)
+    retrieval_capacity: Callable[[], int] | None = field(default=None, kw_only=True)
 
-    def remaining(self) -> float:
-        time_left = self.deadline - self.monotonic()
+    def can_read_blobs(
+        self, entries: tuple[tuple[RevisionSide, FileSide], ...]
+    ) -> bool:
+        capacity = self.bytes_left
+        if self.retrieval_capacity is not None:
+            capacity = min(capacity, self.retrieval_capacity())
+        calls_left = (
+            _LIMITS["blob"]
+            - _VERIFICATION_READ_RESERVE["blob"]
+            - self.counts.get("blob", 0)
+        )
+        for side, entry in entries:
+            if (side, entry.path) in self.blobs:
+                continue
+            calls_left -= 1
+            if calls_left < 0 or (entry.blob_bytes or 0) > min(_TEXT_BYTES, capacity):
+                return False
+            capacity -= entry.blob_bytes or 0
+        return True
+
+    def remaining(self, *, optional: OptionalRetrieval | None = None) -> float:
+        deadline = self.deadline
+        if optional is not None and optional.deadline is not None:
+            deadline = min(deadline, optional.deadline)
+        time_left = deadline - self.monotonic()
         if time_left <= 0:
             raise WorkLimit
         return time_left
 
-    def _allocate(self, operation: _Operation) -> float:
-        time_left = self.remaining()
+    def _allocate(
+        self, operation: _Operation, *, optional: OptionalRetrieval | None = None
+    ) -> float:
+        time_left = self.remaining(optional=optional)
         count = self.counts.get(operation, 0)
         if count >= _LIMITS[operation]:
             raise WorkLimit
         self.counts[operation] = count + 1
         return time_left
 
+    def _read_optional[T](
+        self,
+        operation: Literal["blob", "search"],
+        budget: OptionalRetrieval,
+        cap: int,
+        fetch: Callable[[int], T | ReadFailure],
+        size: Callable[[T], int | None],
+    ) -> T | ReadFailure:
+        reserve = _VERIFICATION_READ_RESERVE[operation]
+        if self.counts.get(operation, 0) >= _LIMITS[operation] - reserve:
+            return "limit_reached"
+        if operation == "blob":
+            cap = min(cap, self.bytes_left - reserve * _TEXT_BYTES)
+        return budget.read(cap, fetch, size)
+
     def blob(
-        self, side: RevisionSide, path: str, *, expected: FileSide | None = None
+        self,
+        side: RevisionSide,
+        path: str,
+        *,
+        expected: FileSide | None = None,
+        optional: OptionalRetrieval | None = None,
     ) -> PinnedTextBlob | ReadFailure:
         key = side, path
         if key not in self.blobs:
@@ -91,12 +169,30 @@ class PinnedEvidenceWork:
                 and expected.blob_bytes is not None
                 and self.bytes_left < expected.blob_bytes <= _TEXT_BYTES
             ):
+                if optional is not None:
+                    return "limit_reached"
                 raise WorkLimit
             limit = min(self.bytes_left, _TEXT_BYTES)
-            result = self.source.read_text_blob(
-                side, path, max_bytes=limit, timeout_seconds=self._allocate("blob")
+
+            def fetch(cap: int) -> PinnedTextBlob | ReadFailure:
+                result = self.source.read_text_blob(
+                    side,
+                    path,
+                    max_bytes=cap,
+                    timeout_seconds=self._allocate("blob", optional=optional),
+                )
+                self.remaining(optional=optional)
+                return result
+
+            result = (
+                self._read_optional(
+                    "blob", optional, limit, fetch, lambda blob: len(blob.text)
+                )
+                if optional is not None
+                else fetch(limit)
             )
-            self.remaining()
+            if optional is not None and isinstance(result, str):
+                return result
             if not isinstance(result, str):
                 commit = (
                     self.comparison.merge_base
@@ -108,50 +204,87 @@ class PinnedEvidenceWork:
                     commit,
                     path,
                 ) or len(result.text) > limit:
+                    if optional is not None:
+                        return "unavailable"
                     result = "unavailable"
                 else:
                     self.bytes_left -= len(result.text)
+                    if not _matches_inventory(result, expected):
+                        if optional is not None:
+                            return "unavailable"
+                        result = "unavailable"
             elif result == "limit_reached" and limit < _TEXT_BYTES and expected is None:
                 # A context candidate may fit the per-blob cap but not the remaining shared bytes.
                 raise WorkLimit
             self.blobs[key] = result
         blob = self.blobs[key]
-        if (
-            expected is not None
-            and not isinstance(blob, str)
-            and (blob.blob_id, len(blob.text))
-            != (expected.object_id, expected.blob_bytes)
-        ):
-            self.blobs[key] = "unavailable"
+        if not isinstance(blob, str) and not _matches_inventory(blob, expected):
+            if optional is None:
+                self.blobs[key] = "unavailable"
             return "unavailable"
         return blob
 
-    def hunks(self, change: ChangedFile) -> tuple[Hunk, ...] | ReadFailure:
+    def hunks(
+        self, change: ChangedFile, *, preflight_one_sided: bool = False
+    ) -> tuple[Hunk, ...] | ReadFailure:
         path = (
             change.old.path if change.old else None,
             change.new.path if change.new else None,
         )
         if path not in self.patches:
+            if preflight_one_sided and None in path:
+                side = change.new or change.old
+                cap = _HUNK_BYTES
+                if self.retrieval_capacity is not None:
+                    cap = min(cap, self.retrieval_capacity())
+                if side and (side.blob_bytes or 0) > cap:
+                    return "limit_reached"
             self.patches[path] = self.source.hunks(
-                change, max_bytes=64 * 1024, timeout_seconds=self._allocate("hunk")
+                change, max_bytes=_HUNK_BYTES, timeout_seconds=self._allocate("hunk")
             )
             self.remaining()
         return self.patches[path]
 
     def search(
-        self, side: RevisionSide, literal: str, *, regular_text: bool = False
+        self,
+        side: RevisionSide,
+        literal: str,
+        *,
+        regular_text: bool = False,
+        optional: OptionalRetrieval | None = None,
     ) -> SearchPaths | ReadFailure:
         key = side, literal, regular_text
         if key not in self.searches:
-            self.searches[key] = self.source.search(
-                side,
-                literal,
-                max_paths=20,
-                max_bytes=_SEARCH_BYTES,
-                timeout_seconds=self._allocate("search"),
-                regular_text=regular_text,
+
+            def fetch(cap: int) -> SearchPaths | ReadFailure:
+                result = self.source.search(
+                    side,
+                    literal,
+                    max_paths=20,
+                    max_bytes=cap,
+                    timeout_seconds=self._allocate("search", optional=optional),
+                    regular_text=regular_text,
+                )
+                if optional is not None:
+                    self.remaining(optional=optional)
+                return result
+
+            result = (
+                self._read_optional(
+                    "search",
+                    optional,
+                    _SEARCH_BYTES,
+                    fetch,
+                    lambda found: found.retrieved_bytes,
+                )
+                if optional is not None
+                else fetch(_SEARCH_BYTES)
             )
-            self.remaining()
+            if optional is not None and isinstance(result, str):
+                return result
+            self.searches[key] = result
+            if optional is None:
+                self.remaining()
         return self.searches[key]
 
     def text_lines(self, blob: PinnedTextBlob) -> tuple[str, ...]:

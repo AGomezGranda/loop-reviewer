@@ -54,3 +54,16 @@ def create_inbox_tables(connection: sqlite3.Connection, _from_version: int) -> N
 
 def rename_inbox_projects(connection: sqlite3.Connection, _from_version: int) -> None:
     connection.execute("ALTER TABLE inbox_settings RENAME COLUMN project TO projects")
+
+
+def add_title_exclusions(connection: sqlite3.Connection, _from_version: int) -> None:
+    connection.execute(
+        "ALTER TABLE inbox_settings ADD COLUMN excluded_title_terms TEXT NOT NULL DEFAULT '[]'"
+    )
+
+
+def add_inbox_scan_version(connection: sqlite3.Connection, _from_version: int) -> None:
+    connection.execute(
+        "ALTER TABLE inbox_settings ADD COLUMN scan_version INTEGER NOT NULL DEFAULT 1"
+    )
+    connection.execute("UPDATE inbox_settings SET scan_version = version")

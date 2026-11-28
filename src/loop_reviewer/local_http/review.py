@@ -47,7 +47,7 @@ from loop_reviewer.review.model import (
     SelectionChange,
 )
 from loop_reviewer.review.pull_request import PullRequestRef
-from loop_reviewer.reviewer.full_review_contract import FullReviewResult
+from loop_reviewer.reviewer.hosted_report_contract import HostedReport
 
 
 class LaunchReview(RequestModel):
@@ -165,7 +165,7 @@ class DraftResponse(ResponseModel):
     publication_id: str | None
     generation_model: str | None
     estimated_cost_usd: float | None
-    report: FullReviewResult | None
+    report: HostedReport | None
 
     @classmethod
     def from_saved(

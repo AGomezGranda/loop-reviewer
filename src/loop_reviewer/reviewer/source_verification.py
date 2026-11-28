@@ -6,6 +6,7 @@ from typing import Literal
 from loop_reviewer.reviewer.local_check_contract import SourceEvidence, SourceLocation
 from loop_reviewer.reviewer.local_evidence import (
     EvidenceIndex,
+    OptionalRetrieval,
     PinnedEvidenceWork,
     WorkLimit,
     source_resolves,
@@ -42,6 +43,9 @@ def build_source_packet(
     bundle: EvidenceBundle,
     work: PinnedEvidenceWork,
     index: EvidenceIndex,
+    *,
+    optional: OptionalRetrieval | None = None,
+    pinned_text: bool = False,
 ) -> SourcePacket | PrivateLead:
     file = next(item for item in bundle.inventory if item.id == candidate.file_id)
     change = file.change
@@ -66,16 +70,22 @@ def build_source_packet(
         return lead("The affected path's pinned hunks are unavailable.")
     hunks = patch
 
-    def on_edit(excerpt: ShownExcerpt) -> bool:
+    def on_edit(excerpt: ShownExcerpt, *, removal_only: bool = False) -> bool:
         loc = excerpt.source.range
         expected = change.old if loc.side == "base" else change.new
         return (
-            expected is not None
+            (not pinned_text or bool(excerpt.changed_lines))
+            and expected is not None
             and (loc.path, loc.blob_id) == (expected.path, expected.object_id)
             and any(
-                loc.start_line <= line <= loc.end_line
+                any(
+                    loc.start_line <= line <= loc.end_line
+                    for line in changed_lines(hunk, loc.side)
+                )
+                and (
+                    not removal_only or next(changed_lines(hunk, "head"), None) is None
+                )
                 for hunk in hunks
-                for line in changed_lines(hunk, loc.side)
             )
         )
 
@@ -85,8 +95,14 @@ def build_source_packet(
         loc = accepted[key].range
         role = citation.role
         if role == "head_change":
-            valid = loc.side == ("base" if absent == "head" else "head") and on_edit(
-                excerpts[key]
+            valid = (
+                loc.side == ("base" if absent == "head" else "head")
+                and on_edit(excerpts[key])
+            ) or (
+                pinned_text
+                and absent is None
+                and loc.side == "base"
+                and on_edit(excerpts[key], removal_only=True)
             )
         elif role == "base_behavior":
             valid = loc.side == "base" and (
@@ -122,6 +138,7 @@ def build_source_packet(
             index,
             sides=("head",),
             exclude_ids=frozenset(accepted),
+            optional=optional,
         )
     except WorkLimit:
         alternatives = ()

@@ -10,6 +10,7 @@ from loop_reviewer.inbox.actions import InboxActions
 from loop_reviewer.inbox.configuration import ConfigureLocal, LocalSettings
 from loop_reviewer.inbox.discovery import InboxNotConfigured
 from loop_reviewer.inbox.model import (
+    InboxReasonCode,
     InboxReport,
     InboxRow,
     JiraProjectKey,
@@ -48,6 +49,7 @@ class RowIdentity(RequestModel):
 
 
 class ConfigureInboxRequest(RequestModel):
+    excluded_title_terms: list[str] | None = None
     settings_version: SQLiteId | None
     jira_project_keys: list[str]
     repository_urls: list[str]
@@ -55,6 +57,7 @@ class ConfigureInboxRequest(RequestModel):
 
 
 class InboxConfiguration(ResponseModel):
+    excluded_title_terms: list[str]
     settings_version: SQLiteId | None
     jira_project_keys: list[str]
     repository_urls: list[str]
@@ -69,6 +72,7 @@ class InboxConfiguration(ResponseModel):
             jira_project_keys=[project.value for project in settings.projects],
             repository_urls=[address.url for address in settings.addresses],
             config_revision=settings.revision,
+            excluded_title_terms=list(settings.excluded_title_terms),
         )
 
 
@@ -102,13 +106,22 @@ class RowAction(RequestModel):
         )
 
 
+class InboxReasonResponse(ResponseModel):
+    code: InboxReasonCode
+    label: str
+
+
 class InboxRowResponse(ResponseModel):
     url: str
     identity: RowIdentityResponse
     title: str
     repository: str
     author: str
+    opened_at: int | None = Field(
+        description="Opening time in Unix epoch seconds; null for legacy scans without a timestamp."
+    )
     reasons: tuple[str, ...]
+    reason_details: tuple[InboxReasonResponse, ...]
     last_saved: RunStatus | None
     stale: bool
 
@@ -127,7 +140,12 @@ class InboxRowResponse(ResponseModel):
             title=row.pull_request.title,
             repository=f"{ref.owner}/{ref.repo}",
             author=row.pull_request.author,
-            reasons=row.reasons,
+            opened_at=row.pull_request.opened_at,
+            reasons=tuple(reason.label for reason in row.reasons),
+            reason_details=tuple(
+                InboxReasonResponse(code=reason.code, label=reason.label)
+                for reason in row.reasons
+            ),
             last_saved=row.last_saved,
             stale=row.stale,
         )
@@ -223,6 +241,9 @@ def routes(
             settings = configure.run(
                 projects,
                 addresses,
+                excluded_title_terms=tuple(body.excluded_title_terms)
+                if body.excluded_title_terms is not None
+                else None,
                 expected_version=int(body.settings_version or 0),
                 expected_revision=body.config_revision,
             )

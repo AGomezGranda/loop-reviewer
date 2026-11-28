@@ -71,6 +71,13 @@ class SpendLedger:
         self._fault = False
         self.blocked_reason: BudgetBlock | None = None
 
+    def investigation_context_fits(self, quote: CallQuote, later_packets: int) -> bool:
+        # Budget up to two attempts per preceding packet and protected dispatch of the last.
+        return (
+            self._spent + self._held + (3 + 2 * later_packets) * quote.worst_case
+            <= self.amount
+        )
+
     def reserve(self, quote: CallQuote, purpose: ModelKind) -> Reservation | None:
         self.blocked_reason = self._block(quote, purpose)
         if self.blocked_reason is not None:

@@ -498,6 +498,54 @@ export interface components {
             stop_reason: "finished";
             usage: components["schemas"]["SemanticUsage"];
         };
+        /** CompleteFullReviewV6 */
+        CompleteFullReviewV6: {
+            comparison: components["schemas"]["PinnedComparison"];
+            discussion: components["schemas"]["DiscussionSummary"] | null;
+            /** Discussion References */
+            discussion_references: components["schemas"]["DiscussionReference"][];
+            /** Discussion Status */
+            discussion_status: ("complete" | "partial" | "unavailable") | "not_requested";
+            /** Error */
+            error: null;
+            /** Evidence Index */
+            evidence_index: components["schemas"]["SourceEvidence"][];
+            /** File Coverage */
+            file_coverage: components["schemas"]["SemanticCoverage"][];
+            /** Findings */
+            findings: components["schemas"]["SemanticFinding"][];
+            /** Investigation Coverage */
+            investigation_coverage: components["schemas"]["BehaviorInvestigation"][];
+            /** Linked Existing Threads */
+            linked_existing_threads: components["schemas"]["LinkedExistingThread"][];
+            /** Policy Version */
+            policy_version: number;
+            /** Private Leads */
+            private_leads: components["schemas"]["SemanticLead"][];
+            /**
+             * Recommendation
+             * @enum {string}
+             */
+            recommendation: "comment" | "none";
+            /** Schema Version */
+            schema_version: number;
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "full_review";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "complete";
+            /**
+             * Stop Reason
+             * @constant
+             */
+            stop_reason: "finished";
+            usage: components["schemas"]["SemanticUsage"];
+        };
         /** CompletedOutcome */
         CompletedOutcome: {
             completion: components["schemas"]["CompletionDetail"];
@@ -520,7 +568,7 @@ export interface components {
             /** Generationmodel */
             generationModel: string | null;
             receipt: components["schemas"]["ReceiptResponse"] | null;
-            report: components["schemas"]["FullReviewResult"] | null;
+            report: components["schemas"]["HostedReport"] | null;
             /** Runid */
             runId: string;
             selection: components["schemas"]["SelectionResponse"];
@@ -550,6 +598,8 @@ export interface components {
         ConfigureInboxRequest: {
             /** Configrevision */
             configRevision: string;
+            /** Excludedtitleterms */
+            excludedTitleTerms?: string[] | null;
             /** Jiraprojectkeys */
             jiraProjectKeys: string[];
             /** Repositoryurls */
@@ -688,7 +738,7 @@ export interface components {
             generationModel: string | null;
             /** Publicationid */
             publicationId: string | null;
-            report: components["schemas"]["FullReviewResult"] | null;
+            report: components["schemas"]["HostedReport"] | null;
             /** Runid */
             runId: string;
             selection: components["schemas"]["SelectionResponse"];
@@ -800,6 +850,54 @@ export interface components {
             stop_reason: "fatal_error";
             usage: components["schemas"]["SemanticUsage"];
         };
+        /** FailedFullReviewV6 */
+        FailedFullReviewV6: {
+            comparison: components["schemas"]["PinnedComparison"];
+            discussion: components["schemas"]["DiscussionSummary"] | null;
+            /** Discussion References */
+            discussion_references: unknown[];
+            /** Discussion Status */
+            discussion_status: ("complete" | "partial" | "unavailable") | "not_requested";
+            /** Error */
+            error: components["schemas"]["InventoryError"] | components["schemas"]["InvalidReport"];
+            /** Evidence Index */
+            evidence_index: unknown[];
+            /** File Coverage */
+            file_coverage: unknown[];
+            /** Findings */
+            findings: unknown[];
+            /** Investigation Coverage */
+            investigation_coverage: unknown[];
+            /** Linked Existing Threads */
+            linked_existing_threads: unknown[];
+            /** Policy Version */
+            policy_version: number;
+            /** Private Leads */
+            private_leads: unknown[];
+            /**
+             * Recommendation
+             * @constant
+             */
+            recommendation: "none";
+            /** Schema Version */
+            schema_version: number;
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "full_review";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "failed";
+            /**
+             * Stop Reason
+             * @constant
+             */
+            stop_reason: "fatal_error";
+            usage: components["schemas"]["SemanticUsage"];
+        };
         /** FailedOutcome */
         FailedOutcome: {
             /**
@@ -865,6 +963,8 @@ export interface components {
         };
         /** FullReviewResult */
         FullReviewResult: components["schemas"]["CompleteFullReview"] | components["schemas"]["PartialFullReview"] | components["schemas"]["FailedFullReview"];
+        /** FullReviewResultV6 */
+        FullReviewResultV6: components["schemas"]["CompleteFullReviewV6"] | components["schemas"]["PartialFullReviewV6"] | components["schemas"]["FailedFullReviewV6"];
         /** HistoryPage */
         HistoryPage: {
             /** Completions */
@@ -872,16 +972,27 @@ export interface components {
             /** Nextbefore */
             nextBefore: string | null;
         };
+        HostedReport: components["schemas"]["FullReviewResult"] | components["schemas"]["FullReviewResultV6"];
         /** InboxConfiguration */
         InboxConfiguration: {
             /** Configrevision */
             configRevision: string;
+            /** Excludedtitleterms */
+            excludedTitleTerms: string[];
             /** Jiraprojectkeys */
             jiraProjectKeys: string[];
             /** Repositoryurls */
             repositoryUrls: string[];
             /** Settingsversion */
             settingsVersion: string | null;
+        };
+        /** @enum {string} */
+        InboxReasonCode: "direct_request" | "authored" | "jira_project";
+        /** InboxReasonResponse */
+        InboxReasonResponse: {
+            code: components["schemas"]["InboxReasonCode"];
+            /** Label */
+            label: string;
         };
         /** InboxRowResponse */
         InboxRowResponse: {
@@ -890,6 +1001,13 @@ export interface components {
             identity: components["schemas"]["RowIdentityResponse"];
             /** Lastsaved */
             lastSaved: ("running" | "draft_ready") | ("failed" | "abandoned") | null;
+            /**
+             * Openedat
+             * @description Opening time in Unix epoch seconds; null for legacy scans without a timestamp.
+             */
+            openedAt: number | null;
+            /** Reasondetails */
+            reasonDetails: components["schemas"]["InboxReasonResponse"][];
             /** Reasons */
             reasons: string[];
             /** Repository */
@@ -1042,6 +1160,54 @@ export interface components {
             findings: components["schemas"]["SemanticFinding"][];
             /** Investigation Coverage */
             investigation_coverage: (components["schemas"]["Investigation"] | components["schemas"]["BehaviorInvestigation"])[];
+            /** Linked Existing Threads */
+            linked_existing_threads: components["schemas"]["LinkedExistingThread"][];
+            /** Policy Version */
+            policy_version: number;
+            /** Private Leads */
+            private_leads: components["schemas"]["SemanticLead"][];
+            /**
+             * Recommendation
+             * @enum {string}
+             */
+            recommendation: "comment" | "none";
+            /** Schema Version */
+            schema_version: number;
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "full_review";
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "partial";
+            /**
+             * Stop Reason
+             * @enum {string}
+             */
+            stop_reason: "finished" | "work_limit" | "budget_exhausted";
+            usage: components["schemas"]["SemanticUsage"];
+        };
+        /** PartialFullReviewV6 */
+        PartialFullReviewV6: {
+            comparison: components["schemas"]["PinnedComparison"];
+            discussion: components["schemas"]["DiscussionSummary"] | null;
+            /** Discussion References */
+            discussion_references: components["schemas"]["DiscussionReference"][];
+            /** Discussion Status */
+            discussion_status: ("complete" | "partial" | "unavailable") | "not_requested";
+            /** Error */
+            error: null;
+            /** Evidence Index */
+            evidence_index: components["schemas"]["SourceEvidence"][];
+            /** File Coverage */
+            file_coverage: components["schemas"]["SemanticCoverage"][];
+            /** Findings */
+            findings: components["schemas"]["SemanticFinding"][];
+            /** Investigation Coverage */
+            investigation_coverage: components["schemas"]["BehaviorInvestigation"][];
             /** Linked Existing Threads */
             linked_existing_threads: components["schemas"]["LinkedExistingThread"][];
             /** Policy Version */

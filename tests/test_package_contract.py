@@ -12,7 +12,7 @@ import pytest
 _PACKAGE = Path(__file__).resolve().parents[1] / "src" / "loop_reviewer"
 _REVIEW = f"{_PACKAGE.name}.review"
 _REVIEWER = f"{_PACKAGE.name}.reviewer"
-_REPORT = f"{_REVIEWER}.full_review_contract.FullReviewResult"
+_REPORT = f"{_REVIEWER}.hosted_report_contract.HostedReport"
 _SOURCE_NAMES = f"{_PACKAGE.name}.source_names"
 _FEEDBACK_TEXT = f"{_PACKAGE.name}.feedback_text"
 _INBOX = f"{_PACKAGE.name}.inbox"
@@ -52,15 +52,14 @@ def test_review_workflow_uses_reviewer_only_at_its_boundary() -> None:
         "hosted_report.py": (
             _REPORT,
             f"{_REVIEWER}.discussion_contract.DiscussionSnapshotV1",
-            f"{_REVIEWER}.full_review_contract.FullReviewRequest",
+            f"{_REVIEWER}.full_review_v6.FullReviewRequestV6",
             f"{_REVIEWER}.inventory_contract.InventoryBudget",
             f"{_REVIEWER}.inventory_contract.PinnedComparison",
             f"{_REVIEWER}.inventory_contract.canonical_path",
             f"{_REVIEWER}.local_check_contract.SourceLocation",
             f"{_REVIEWER}.model_contract.ReviewModel",
             f"{_REVIEWER}.pinned_source.PinnedSource",
-            f"{_REVIEWER}.python_context.PythonAnalyzer",
-            f"{_REVIEWER}.semantic_review.review_full",
+            f"{_REVIEWER}.semantic_review.review_full_v6",
         ),
     }
     violations = [
@@ -82,6 +81,8 @@ def test_reviewer_policy_imports_only_stdlib_and_reviewer_contracts() -> None:
         "discussion_contract.py",
         "discussion_report.py",
         "full_review_contract.py",
+        "full_review_v6.py",
+        "hosted_report_contract.py",
         "inventory_contract.py",
         "local_check_contract.py",
         "model_contract.py",

@@ -21,21 +21,25 @@ export function repositoryKey(
 
 export function RepositoryPicker({
 	report,
+	queue,
+	rows,
 	selected,
 	onSelect,
 }: {
 	report: InboxReport;
+	queue: "active" | "later";
+	rows: InboxReport["active"];
 	selected: Repository | undefined;
 	onSelect: (key: string) => void;
 }) {
 	const [search, setSearch] = useState("");
 	const counts = new Map<string, number>();
-	for (const row of report.active) {
+	for (const row of rows) {
 		const key = repositoryKey(row.identity);
 		counts.set(key, (counts.get(key) ?? 0) + 1);
 	}
 	const options = [
-		{ key: "", label: "All repositories", count: report.active.length },
+		{ key: "", label: "All repositories", count: rows.length },
 		...report.repositories.map((repo) => ({
 			key: repositoryKey(repo),
 			label: `${repo.host}/${repo.repository}`,
@@ -70,7 +74,7 @@ export function RepositoryPicker({
 						<DialogClose key={option.key} asChild>
 							<Button
 								variant="ghost"
-								aria-label={`${option.label} ${option.count} active`}
+								aria-label={`${option.label} ${option.count} ${queue}`}
 								aria-pressed={
 									option.key === (selected ? repositoryKey(selected) : "")
 								}
@@ -80,7 +84,9 @@ export function RepositoryPicker({
 								<span className="min-w-0 wrap-anywhere font-mono text-xs whitespace-normal">
 									{option.label}
 								</span>
-								<span className="shrink-0 text-xs">{option.count} active</span>
+								<span className="shrink-0 text-xs">
+									{option.count} {queue}
+								</span>
 							</Button>
 						</DialogClose>
 					))}

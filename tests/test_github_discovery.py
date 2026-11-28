@@ -75,6 +75,7 @@ def _pr(number: int, repository: int = 22) -> dict[str, object]:
         "state": "open",
         "draft": False,
         "user": {"login": "bob"},
+        "created_at": "2026-11-27T12:00:00Z",
         "requested_reviewers": [{"login": "alice"}],
         "base": {"repo": {"id": repository}},
     }
@@ -100,7 +101,10 @@ def test_refresh_paginates_locally_and_rechecks_identity(
             RepositoryAddress("github.com", "Owner/Canonical"), 22, "alice"
         )
     )
-    assert [row.ref.number for row in rows] == [1, 2]
+    assert [(row.ref.number, row.opened_at) for row in rows] == [
+        (1, 1795780800),
+        (2, 1795780800),
+    ]
     endpoint = "repos/Owner/Canonical"
     assert calls.read_text().splitlines() == [
         "user",

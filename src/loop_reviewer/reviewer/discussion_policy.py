@@ -10,11 +10,13 @@ from loop_reviewer.reviewer.discussion_contract import (
     capture_blocks_thread_link,
 )
 from loop_reviewer.reviewer.discussion_report import DiscussionKind, MappingOmission
+from loop_reviewer.reviewer.full_review_contract import text_eligible
 from loop_reviewer.reviewer.inventory import RevisionSide
 from loop_reviewer.reviewer.inventory_contract import ChangedFile, FileSide, encode_path
 from loop_reviewer.reviewer.local_check_contract import SourceEvidence
 from loop_reviewer.reviewer.local_evidence import (
     LocalEvidenceWork,
+    PinnedEvidenceWork,
     WorkLimit,
     python_sides,
 )
@@ -78,8 +80,13 @@ class DiscussionDisposition:
 
 @dataclass
 class _Inspection:
-    work: LocalEvidenceWork
+    work: PinnedEvidenceWork
     left: int = _INSPECTIONS
+
+    def eligible(self, row: ChangedFile) -> bool:
+        if isinstance(self.work, LocalEvidenceWork):
+            return not row.binary and bool(python_sides(row))
+        return text_eligible(row)
 
     def take(self) -> None:
         self.work.remaining()
@@ -137,7 +144,7 @@ class _Inspection:
                 return True
             if declaration:
                 lines.update(edits)
-        if not lines:
+        if not lines or not isinstance(self.work, LocalEvidenceWork):
             return False
         self.take()
         file = row.old if loc.side == "base" else row.new
@@ -194,10 +201,6 @@ def _indexes(
                 by_side[side, file.path] = row
                 by_path.setdefault(file.path, set()).add(row)
     return by_side, by_path
-
-
-def _eligible(row: ChangedFile | None) -> bool:
-    return row is not None and not row.binary and bool(python_sides(row))
 
 
 def _unique_on_pair(
@@ -259,7 +262,7 @@ def _anchored(
         if deletion_side and hunk is None:
             return None
         row = by_side.get((side, path))
-        if row is None or not _eligible(row):
+        if row is None or not inspect.eligible(row):
             return None
         file = row.old if side == "base" else row.new
         assert file is not None
@@ -279,7 +282,7 @@ def _anchored(
             return row, matches[0], True
         return None
     row = _only_row(by_path.get(path))
-    if row is None or not _eligible(row):
+    if row is None or not inspect.eligible(row):
         return None
     location = _unique_on_pair(inspect, row, quote)
     return (
@@ -306,7 +309,7 @@ def _unanchored(
         encode_path(path.encode("utf-8")), set()
     )
     row = _only_row(possibilities)
-    if row is None or not _eligible(row):
+    if row is None or not inspect.eligible(row):
         return None
     location = _unique_on_pair(inspect, row, quote)
     return (
@@ -319,7 +322,7 @@ def _unanchored(
 def map_discussion(
     snapshot: DiscussionSnapshotV1,
     rows: tuple[ChangedFile, ...],
-    work: LocalEvidenceWork,
+    work: PinnedEvidenceWork,
 ) -> DiscussionContext:
     by_side, by_path = _indexes(rows)
     attachments: dict[ChangedFile, list[Attachment]] = {}

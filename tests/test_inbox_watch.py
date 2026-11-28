@@ -7,7 +7,9 @@ import pytest
 from loop_reviewer.inbox.model import InboxReport, InboxSettings, JiraProjectKey
 from loop_reviewer.integrations.local_state.inbox_watch import InboxWatch
 
-_REPORT = InboxReport(InboxSettings((JiraProjectKey("ABC"),), (), 1), (), ())
+_REPORT = InboxReport(
+    InboxSettings((JiraProjectKey("ABC"),), (), version=1, scan_version=1), (), ()
+)
 
 
 def test_watchers_share_deadline_and_manual_scan_satisfies_due_tick(

@@ -17,15 +17,25 @@ from loop_reviewer.inbox.model import (
     WatchedRepository,
 )
 from loop_reviewer.integrations import git_comparison
+from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
 from loop_reviewer.local_http.serve import serve
-from loop_reviewer.review.model import FindingLocation, PublicationReceipt
+from loop_reviewer.review.hosted_report import project_report
+from loop_reviewer.review.model import (
+    FindingLocation,
+    GeneratedReview,
+    PublicationReceipt,
+    ReviewSelection,
+)
 from loop_reviewer.review.publication_model import PublicationPreview
 from loop_reviewer.review.pull_request import (
     PullRequest,
     PullRequestRef,
     ReviewedRevision,
 )
-from loop_reviewer.reviewer.inventory_contract import InventoryBudget
+from loop_reviewer.reviewer.full_review_contract import FullReviewRequest
+from loop_reviewer.reviewer.integrations.git_inventory import open_local_comparison
+from loop_reviewer.reviewer.integrations.python_analyzer import CpythonAnalyzer
+from loop_reviewer.reviewer.inventory_contract import InventoryBudget, PinnedComparison
 from loop_reviewer.reviewer.model_contract import (
     CallQuote,
     ModelAttempt,
@@ -34,7 +44,8 @@ from loop_reviewer.reviewer.model_contract import (
     TokenUsage,
     parse_reply,
 )
-from tests.support.inventory_git import commit, git, init, revision
+from loop_reviewer.reviewer.semantic_review import review_full
+from tests.support.inventory_git import PATH_ENV, commit, git, init, revision
 
 _REVISION = ReviewedRevision("main", "a" * 40, "b" * 40, "c" * 40)
 
@@ -115,23 +126,57 @@ class BrowserModel:
     def send(
         self, call: ModelCall, quote: CallQuote, *, timeout_seconds: float
     ) -> ModelAttempt:
-        if call.kind != "investigation":
-            raise AssertionError(
-                "An unknown-impact candidate must not reach verification"
+        if call.kind == "verification":
+            assert "PRIVATE-LEAD-CANARY" not in call.prompt
+            entries = json.loads(call.prompt.rsplit("\n", 1)[1])
+            return _attempt(
+                call,
+                {
+                    "schema_version": 1,
+                    "candidate_id": call.unit_id,
+                    "assessment": "supports",
+                    "evidence_ids": [entry["id"] for entry in entries],
+                    "explanation": "The pinned head has an unmatched closing parenthesis.",
+                },
             )
         packet = json.loads(call.prompt.split("\n\n", 1)[1])
         head = next(
             item["id"]
-            for item in packet["excerpts"]
+            for item in packet["changed_excerpts"]
             if item["range"]["path"] == "settings.txt"
             and item["range"]["side"] == "head"
         )
+        python = {
+            item["range"]["side"]: item["id"]
+            for item in packet["changed_excerpts"]
+            if item["range"]["path"] == "example.py"
+        }
         response = {
             "schema_version": 1,
             "investigation_id": call.unit_id,
             "kind": "submit_candidates",
-            "reviewed_file_ids": ["p00002"],
+            "reviewed_file_ids": packet["selected_file_ids"],
             "candidates": [
+                {
+                    "file_id": "p00001",
+                    "changed_behavior": "The module cannot be loaded.",
+                    "trigger": "Load example.py from the pinned head.",
+                    "consequence": "The unmatched closing parenthesis prevents the module from loading.",
+                    "proposed_impact": "material_incorrect_behavior",
+                    "citations": [
+                        {"role": "base_behavior", "evidence_id": python["base"]},
+                        *(
+                            {"role": role, "evidence_id": python["head"]}
+                            for role in (
+                                "head_change",
+                                "trigger",
+                                "consequence",
+                                "impact",
+                            )
+                        ),
+                    ],
+                    "proposed_anchor_id": python["head"],
+                },
                 {
                     "file_id": "p00002",
                     "changed_behavior": "The endpoint changes.",
@@ -140,16 +185,42 @@ class BrowserModel:
                     "proposed_impact": "unknown",
                     "citations": [{"role": "head_change", "evidence_id": head}],
                     "proposed_anchor_id": None,
-                }
+                },
             ],
         }
-        wire = json.dumps(response)
-        return ModelAttempt(
-            "success",
-            TokenUsage(20, 5, 25),
-            parse_reply(call, wire),
-            len(wire.encode()),
-        )
+        return _attempt(call, response)
+
+
+def _attempt(call: ModelCall, response: dict[str, object]) -> ModelAttempt:
+    wire = json.dumps(response)
+    return ModelAttempt(
+        "success", TokenUsage(20, 5, 25), parse_reply(call, wire), len(wire.encode())
+    )
+
+
+def _seed_v5(repo: Path) -> None:
+    ref = PullRequestRef("github.com", "fixture", "repo", 17, 42)
+    selection = ReviewSelection(ref, "reviewer", "teammate", _REVISION)
+    report = review_full(
+        FullReviewRequest(
+            schema_version=5,
+            scope="full_review",
+            comparison=PinnedComparison(
+                merge_base=_REVISION.merge_base, head=_REVISION.head
+            ),
+            budget=InventoryBudget(max_model_spend_usd_micros=0),
+        ),
+        lambda pins: open_local_comparison(repo, pins, PATH_ENV),
+        CpythonAnalyzer(),
+        None,
+        monotonic,
+    )
+    store = SqliteReviewRunStore(repo.parent / "loop-reviewer" / "reviews.sqlite3")
+    run = store.start(selection, replaces=None).finish(
+        GeneratedReview(project_report(report), None, None, report)
+    )
+    store.save(run)
+    print(run.id)
 
 
 class FakePublication:
@@ -219,6 +290,9 @@ def _model(_environment: dict[str, str]) -> tuple[InventoryBudget, BrowserModel,
 if __name__ == "__main__":
     repo = Path(os.environ["XDG_STATE_HOME"]) / "fixture-git"
     _REVISION = _fixture(repo)
+    if os.sys.argv[1:] == ["seed-v5"]:
+        _seed_v5(repo)
+        raise SystemExit(0)
 
     def remote(ref: PullRequestRef) -> str:
         if (gates := os.environ.get("LOOP_REVIEWER_FIXTURE_GATES")) and ref.number in (

@@ -64,7 +64,7 @@ test("pinned CLI reports stay private through browser edits and exact publicatio
 	expect(initial).toContain(estimate);
 	expect(initial).toContain("Generation model: fixture/model");
 	expect(initial).toMatch(
-		/example\.py: unfinished.*\n.*settings\.txt: unfinished/,
+		/example\.py: complete · semantic.*\n.*settings\.txt: unfinished/,
 	);
 	const runId = initial.match(/^Run ID: (\d+)$/m)?.[1];
 	if (!runId || !head) throw new Error("CLI did not report a run ID and head");
@@ -160,7 +160,7 @@ test("pinned CLI reports stay private through browser edits and exact publicatio
 		await action.selectOption("comment");
 		await page.getByLabel("Summary only").check();
 		await prepare.click();
-		await expect(body).toContainText("CPython rejects the head file");
+		await expect(body).toContainText("unmatched closing parenthesis");
 		await expect(body).not.toContainText(privateLead);
 		await expect(inline).toHaveCount(0);
 		await fresh.click();
@@ -173,7 +173,7 @@ test("pinned CLI reports stay private through browser edits and exact publicatio
 		await prepare.click();
 		await expect(body).toContainText("Browser-edited feedback");
 		await expect(body).not.toContainText(privateLead);
-		await expect(body).not.toContainText("CPython rejects");
+		await expect(body).not.toContainText("unmatched closing parenthesis");
 		const approvedBody = await body.textContent();
 		await page
 			.getByRole("button", { name: "Confirm approval as @reviewer" })
@@ -192,6 +192,51 @@ test("pinned CLI reports stay private through browser edits and exact publicatio
 		expect(completed).toContain("Published — Approval submitted");
 		expect(completed).toContain("Original verified findings");
 		expect(readFileSync(join(state, "events"), "utf8")).toBe("review\n");
+	} finally {
+		await page.close();
+		server.kill("SIGINT");
+		await exited;
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("an existing v5 draft opens without regenerating its compiler finding", async ({
+	page,
+}) => {
+	const cwd = mkdtempSync(join(tmpdir(), "loop-reviewer-v5-"));
+	const state = join(cwd, "state");
+	mkdirSync(state);
+	const env = {
+		...process.env,
+		PYTHONPATH: repository,
+		XDG_STATE_HOME: state,
+		XDG_CONFIG_HOME: cwd,
+	};
+	const cli = (...command: string[]) =>
+		execFileSync("uv", args(...command), { cwd, env, encoding: "utf8" });
+	const runId = cli("seed-v5").trim();
+	expect(cli("draft", "show", runId)).toContain(
+		"CPython rejects the head file",
+	);
+	const server = spawn("uv", args("ui"), {
+		cwd,
+		env,
+		stdio: ["ignore", "pipe", "inherit"],
+	});
+	const exited = once(server, "exit");
+	try {
+		const address = new URL(await launchAddress(server));
+		await page.goto(new URL(`/drafts/${runId}${address.hash}`, address).href);
+		const report = page.getByRole("region", {
+			name: "Original reviewer report",
+		});
+		await report.getByText("Original findings (1)").click();
+		await expect(
+			report.getByText(/CPython rejects the head file/),
+		).toBeVisible();
+		await report.getByText(/Private leads, evidence/).click();
+		await expect(report.getByText(/syntax_error/)).toBeVisible();
+		expect(existsSync(join(state, "events"))).toBe(false);
 	} finally {
 		await page.close();
 		server.kill("SIGINT");

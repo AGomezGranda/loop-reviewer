@@ -34,7 +34,7 @@ from loop_reviewer.integrations.local_state.database import (
 from loop_reviewer.review.pull_request import PullRequestRef
 
 _KEY = "host = ? AND repository_id = ? AND account = ?"
-_VERSION = "EXISTS (SELECT 1 FROM inbox_settings WHERE version = ?)"
+_SCAN_VERSION = "EXISTS (SELECT 1 FROM inbox_settings WHERE scan_version = ?)"
 
 
 class SqliteInboxStore:
@@ -50,6 +50,7 @@ class SqliteInboxStore:
         projects: tuple[JiraProjectKey, ...],
         repositories: tuple[WatchedRepository, ...],
         *,
+        excluded_title_terms: tuple[str, ...] = (),
         expected_version: int | None = None,
     ) -> InboxSettings:
         with self._transaction(write=True) as connection:
@@ -57,11 +58,21 @@ class SqliteInboxStore:
             current_version = old.version if old else 0
             if expected_version is not None and expected_version != current_version:
                 raise InboxSettingsChanged
-            version = current_version + 1
+            settings = (
+                InboxSettings(projects, repositories, 1, 1, excluded_title_terms)
+                if old is None
+                else old.reconfigured(projects, repositories, excluded_title_terms)
+            )
             connection.execute(
-                """INSERT INTO inbox_settings (singleton, projects, version) VALUES (1, ?, ?)
-                ON CONFLICT (singleton) DO UPDATE SET projects = excluded.projects, version = excluded.version""",
-                (",".join(project.value for project in projects), version),
+                """INSERT INTO inbox_settings (singleton, projects, version, excluded_title_terms, scan_version) VALUES (1, ?, ?, ?, ?)
+                ON CONFLICT (singleton) DO UPDATE SET projects = excluded.projects, version = excluded.version,
+                excluded_title_terms = excluded.excluded_title_terms, scan_version = excluded.scan_version""",
+                (
+                    ",".join(project.value for project in projects),
+                    settings.version,
+                    json.dumps(excluded_title_terms),
+                    settings.scan_version,
+                ),
             )
             retained = {repo.key for repo in repositories}
             if old is not None:
@@ -86,21 +97,21 @@ class SqliteInboxStore:
                     for index, repo in enumerate(repositories)
                 ),
             )
-        return InboxSettings(projects, repositories, version)
+        return settings
 
     def begin_scan(
-        self, settings_version: int, repository_key: WatchedRepositoryKey
+        self, scan_version: int, repository_key: WatchedRepositoryKey
     ) -> ScanTicket | None:
         with self._transaction(write=True) as connection:
             row = connection.execute(
                 f"""UPDATE inbox_repositories SET sequence = sequence + 1, outcome = NULL,
-                checked_at = NULL, error = NULL, show_cached = 0 WHERE {_KEY} AND {_VERSION} RETURNING sequence""",
-                (*_parts(repository_key), settings_version),
+                checked_at = NULL, error = NULL, show_cached = 0 WHERE {_KEY} AND {_SCAN_VERSION} RETURNING sequence""",
+                (*_parts(repository_key), scan_version),
             ).fetchone()
             return (
                 None
                 if row is None
-                else ScanTicket(settings_version, repository_key, row[0])
+                else ScanTicket(scan_version, repository_key, row[0])
             )
 
     def record_scan(self, ticket: ScanTicket, result: ScanResult) -> bool:
@@ -121,11 +132,11 @@ class SqliteInboxStore:
                 )
             cursor = connection.execute(
                 f"""UPDATE inbox_repositories SET {outcome}
-                WHERE {_KEY} AND {_VERSION} AND sequence = ? AND outcome IS NULL""",
+                WHERE {_KEY} AND {_SCAN_VERSION} AND sequence = ? AND outcome IS NULL""",
                 (
                     *values,
                     *_parts(ticket.repository_key),
-                    ticket.settings_version,
+                    ticket.scan_version,
                     ticket.sequence,
                 ),
             )
@@ -184,7 +195,7 @@ class SqliteInboxStore:
 
 def _settings(connection: sqlite3.Connection) -> InboxSettings | None:
     row = connection.execute(
-        "SELECT projects, version FROM inbox_settings WHERE singleton = 1"
+        "SELECT projects, version, excluded_title_terms, scan_version FROM inbox_settings WHERE singleton = 1"
     ).fetchone()
     if row is None:
         return None
@@ -195,7 +206,12 @@ def _settings(connection: sqlite3.Connection) -> InboxSettings | None:
         )
     )
     projects = tuple(JiraProjectKey(value) for value in row[0].split(","))
-    return InboxSettings(projects, repositories, row[1])
+    terms: object = json.loads(row[2])
+    if not isinstance(terms, list) or not all(isinstance(term, str) for term in terms):
+        raise ValueError("Invalid cached title exclusions")
+    return InboxSettings(
+        projects, repositories, row[1], row[3], tuple(cast("list[str]", terms))
+    )
 
 
 def _parts(key: WatchedRepositoryKey) -> tuple[str, int, str]:
@@ -241,12 +257,10 @@ def _repository_snapshot(
 def _resolve_row(
     connection: sqlite3.Connection, ref: PullRequestRef
 ) -> InboxRowTarget | None:
-    settings = connection.execute(
-        "SELECT version FROM inbox_settings WHERE singleton = 1"
-    ).fetchone()
+    settings = _settings(connection)
     if settings is None:
         return None
-    target = None
+    match: tuple[WatchedRepositoryKey, DiscoveredPullRequest] | None = None
     for slug, repo_id, account, raw in connection.execute(
         "SELECT slug, repository_id, account, eligible_rows FROM inbox_repositories WHERE host = ? AND eligible_rows IS NOT NULL",
         (ref.host,),
@@ -259,10 +273,21 @@ def _resolve_row(
                 and canonical.owner.casefold() == ref.owner.casefold()
                 and canonical.repo.casefold() == ref.repo.casefold()
             ):
-                if target is not None:
+                if match is not None:
                     return None  # A cached slug can outlive a rename and refer to two stable keys.
-                target = InboxRowTarget(settings[0], repo.key, canonical)
-    return target
+                match = repo.key, row
+    if match is None:
+        return None
+    key, row = match
+    return InboxRowTarget.from_cached_row(settings, key, row)
+
+
+def _opened_at(value: object) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int:
+        raise ValueError("Invalid PR opening time")
+    return value
 
 
 def _encode(rows: tuple[DiscoveredPullRequest, ...]) -> str:
@@ -276,6 +301,7 @@ def _encode(rows: tuple[DiscoveredPullRequest, ...]) -> str:
                 row.state,
                 row.draft,
                 row.requested_users,
+                _opened_at(row.opened_at),
             ]
             for row in rows
         ],
@@ -289,9 +315,12 @@ def _decode(repo: WatchedRepository, raw: str) -> tuple[DiscoveredPullRequest, .
         raise TypeError
     rows: list[DiscoveredPullRequest] = []
     for item in cast("list[object]", data):
-        if not isinstance(item, list) or len(item) != 7:
+        if not isinstance(item, list) or len(item) not in (7, 8):
             raise ValueError
-        slug, number, title, author, state, draft, users = cast("list[object]", item)
+        opened_at = _opened_at(item[7]) if len(item) == 8 else None
+        slug, number, title, author, state, draft, users = cast(
+            "list[object]", item[:7]
+        )
         if (
             not isinstance(slug, str)
             or type(number) is not int
@@ -308,7 +337,13 @@ def _decode(repo: WatchedRepository, raw: str) -> tuple[DiscoveredPullRequest, .
         )
         rows.append(
             DiscoveredPullRequest(
-                ref, title, author, state, draft, tuple(cast("list[str]", users))
+                ref,
+                title,
+                author,
+                state,
+                draft,
+                tuple(cast("list[str]", users)),
+                opened_at,
             )
         )
     return tuple(rows)

@@ -14,7 +14,11 @@ from loop_reviewer.reviewer.discussion_report import (
     LinkedExistingThread,
 )
 from loop_reviewer.reviewer.full_review_contract import text_eligible
-from loop_reviewer.reviewer.inventory_contract import PinnedComparison, decode_path
+from loop_reviewer.reviewer.inventory_contract import (
+    ChangedFile,
+    PinnedComparison,
+    decode_path,
+)
 from loop_reviewer.reviewer.local_check_contract import (
     CompileFinding,
     Evidence,
@@ -32,6 +36,7 @@ from loop_reviewer.reviewer.semantic_contract import (
     SemanticReviewResult,
     SemanticUsage,
 )
+from loop_reviewer.reviewer.semantic_inputs import canonical_inventory
 from loop_reviewer.reviewer.semantic_limits import BehaviorGap
 
 
@@ -84,9 +89,60 @@ def assemble_report(
     *,
     full: bool = False,
 ) -> tuple[dict[str, object], DiscussionDetails]:
+    return _assemble(
+        comparison,
+        ledger,
+        tuple(
+            (f"p{number:05d}", check.row, check)
+            for number, check in enumerate(checks, 1)
+        ),
+        compiler_findings,
+        evidence,
+        batch,
+        compiler_stopped,
+        discussion,
+        full=full,
+        link_threads=True,
+    )
+
+
+def assemble_pinned_report(
+    comparison: PinnedComparison,
+    ledger: SpendLedger,
+    rows: tuple[ChangedFile, ...],
+    batch: BatchOutcome,
+    discussion: DiscussionContext | None,
+) -> tuple[dict[str, object], DiscussionDetails]:
+    return _assemble(
+        comparison,
+        ledger,
+        tuple((file.id, file.change, None) for file in canonical_inventory(rows)),
+        [],
+        batch.evidence,
+        batch,
+        False,
+        discussion,
+        full=True,
+        link_threads=False,
+    )
+
+
+def _assemble(
+    comparison: PinnedComparison,
+    ledger: SpendLedger,
+    inventory: tuple[tuple[str, ChangedFile, CompileCheck | None], ...],
+    compiler_findings: list[CompileFinding],
+    evidence: tuple[Evidence, ...],
+    batch: BatchOutcome,
+    compiler_stopped: bool,
+    discussion: DiscussionContext | None,
+    *,
+    full: bool,
+    link_threads: bool,
+) -> tuple[dict[str, object], DiscussionDetails]:
     disposition = (
         link_verified_threads(batch.findings, discussion, batch.evidence)
-        if discussion
+        if discussion and link_threads
         else None
     )
     retained = (
@@ -106,25 +162,24 @@ def assemble_report(
         for finding in compiler_findings
         if finding.anchor is not None
     }
-    for number, check in enumerate(checks, 1):
-        file_id = f"p{number:05d}"
-        side = check.row.new or check.row.old
+    for number, (file_id, row, check) in enumerate(inventory, 1):
+        side = row.new or row.old
         assert side is not None
-        reason: BehaviorGap | Literal["binary"] | None = check.reason
+        reason: BehaviorGap | Literal["binary"] | None = check.reason if check else None
         highest: Literal["inventory_only", "mechanical", "semantic"] = "inventory_only"
         assigned: tuple[str, ...] = ()
-        compiler = check.investigation()
-        eligible = text_eligible(check.row) if full else compiler is not None
+        compiler = check.investigation() if check else None
+        eligible = text_eligible(row) if full else compiler is not None
         if full and not eligible:
-            reason = "binary" if check.row.binary else "unsupported_language"
+            reason = "binary" if row.binary else "unsupported_language"
         if eligible:
             behavior_id = f"b{number:05d}"
             if discussion is not None:
                 references.extend(
                     _reference(item, behavior_id)
-                    for item in discussion.by_file.get(check.row, ())
+                    for item in discussion.by_file.get(row, ())
                 )
-            mechanical = confirmed.get(side.path) if check.row.new is not None else None
+            mechanical = confirmed.get(side.path) if row.new is not None else None
             issue_ids: dict[str, None] = {}
             decisions: list[CandidateDecision] = []
             gap = batch.gaps.get(file_id)
@@ -213,7 +268,7 @@ def assemble_report(
             )
         coverage.append(
             SemanticCoverage(
-                **check.row.model_dump(),
+                **row.model_dump(),
                 file_id=file_id,
                 outcome="excluded"
                 if reason == "binary"

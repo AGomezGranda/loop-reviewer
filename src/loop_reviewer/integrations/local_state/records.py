@@ -25,7 +25,10 @@ from loop_reviewer.review.model import (
 )
 from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
 from loop_reviewer.review.store import ReviewStoreError
-from loop_reviewer.reviewer.full_review_contract import FullReviewResult
+from loop_reviewer.reviewer.hosted_report_contract import (
+    HostedReport,
+    decode_hosted_report,
+)
 
 _UNREADABLE = "The local review database is unreadable."
 _STATUSES = {"running", "draft_ready", "failed", "abandoned"}
@@ -195,11 +198,11 @@ def run_from_row(row: tuple[object, ...]) -> ReviewRun:
         raise ReviewStoreError(_UNREADABLE) from None
 
 
-def _report_from_json(value: object) -> FullReviewResult | None:
+def _report_from_json(value: object) -> HostedReport | None:
     if value is None:
         return None
     try:
-        return FullReviewResult.model_validate_json(_json_text(value))
+        return decode_hosted_report(_json_text(value))
     except TypeError, ValueError, RecursionError:
         raise ReviewStoreError(_UNREADABLE) from None
 

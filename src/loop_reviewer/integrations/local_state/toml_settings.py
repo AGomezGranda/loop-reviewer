@@ -16,8 +16,8 @@ from loop_reviewer.inbox.configuration import (
     InboxInputs,
     LocalConfigurationError,
     LocalSettings,
+    normalize_excluded_title_terms,
     saved_inbox_inputs,
-    verify_inbox_on_save,
 )
 from loop_reviewer.inbox.discovery import ConfigureInbox
 from loop_reviewer.inbox.model import InboxSettings, JiraProjectKey, RepositoryAddress
@@ -44,6 +44,7 @@ class TomlSettings:
         projects: tuple[JiraProjectKey, ...],
         addresses: tuple[RepositoryAddress, ...],
         *,
+        excluded_title_terms: tuple[str, ...] | None = None,
         expected_version: int | None = None,
         expected_revision: str | None = None,
     ) -> LocalSettings:
@@ -62,15 +63,24 @@ class TomlSettings:
             ):
                 raise InboxSettingsChanged
 
-            repositories = (
-                self._inbox.verify(projects, addresses)
-                if verify_inbox_on_save((projects, addresses), current)
-                or (previous is None and doc.get("inbox") is not None)
-                else ()
+            terms = normalize_excluded_title_terms(
+                current.excluded_title_terms
+                if excluded_title_terms is None
+                else excluded_title_terms
+            )
+            repositories = self._inbox.verify_explicit_save(
+                (projects, addresses, terms),
+                current,
+                saved,
+                repairing=previous is None and doc.get("inbox") is not None,
             )
             if repositories:
                 canonical = tuple(repo.address for repo in repositories)
                 inbox = _editable_table(doc, "inbox")
+                if (terms or "excluded_title_terms" in inbox) and (
+                    previous is None or previous[2] != terms
+                ):
+                    inbox["excluded_title_terms"] = list(terms)
                 if previous is None or previous[0] != projects:
                     inbox["jira_project_key"] = projects[0].value
                 if previous is None or previous[1] != canonical:
@@ -87,7 +97,10 @@ class TomlSettings:
             if repositories:
                 try:
                     saved = self._store.replace_settings(
-                        projects, repositories, expected_version=version
+                        projects,
+                        repositories,
+                        excluded_title_terms=terms,
+                        expected_version=version,
                     )
                 except InboxStoreError, InboxSettingsChanged:
                     if updated != raw:
@@ -113,18 +126,20 @@ class TomlSettings:
             self._store.replace_settings(
                 desired[0],
                 verified,
+                excluded_title_terms=desired[2],
                 expected_version=saved.version if saved else 0,
             )
 
     def _settings(
         self, raw: bytes, inputs: InboxInputs | None, saved: InboxSettings | None
     ) -> LocalSettings:
-        projects, addresses = inputs or saved_inbox_inputs(saved)
+        projects, addresses, terms = inputs or saved_inbox_inputs(saved)
         return LocalSettings(
             projects,
             addresses,
             saved.version if saved else None,
             sha256(raw).hexdigest(),
+            terms,
         )
 
     def _setup_inputs(self, doc: TOMLDocument) -> InboxInputs | None:
@@ -151,10 +166,19 @@ class TomlSettings:
             raise self._error(
                 "Set inbox.jira_project_key and a nonempty inbox.repositories array."
             )
+        terms = fields.get("excluded_title_terms", [])
+        if not isinstance(terms, list) or not all(
+            isinstance(term, str) for term in terms
+        ):
+            raise self._error("Set inbox.excluded_title_terms to an array of strings.")
         try:
-            return (JiraProjectKey(project),), tuple(
-                RepositoryAddress.from_url(url)
-                for url in cast("list[str]", repositories)
+            return (
+                (JiraProjectKey(project),),
+                tuple(
+                    RepositoryAddress.from_url(url)
+                    for url in cast("list[str]", repositories)
+                ),
+                normalize_excluded_title_terms(tuple(cast("list[str]", terms))),
             )
         except ValueError as error:
             raise self._error(str(error)) from None

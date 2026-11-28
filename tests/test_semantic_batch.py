@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from pathlib import Path
 from typing import override
 
 import pytest
@@ -7,14 +8,21 @@ import pytest
 from loop_reviewer.reviewer.change_coverage import (
     ChangedLineExcerpt,
     PreparedCoverage,
+    build_coverage_packet,
+    prepare_coverage,
     required_ranges,
 )
 from loop_reviewer.reviewer.integrations.git_hunks import decode_hunks
+from loop_reviewer.reviewer.integrations.git_inventory import open_local_comparison
 from loop_reviewer.reviewer.integrations.python_analyzer import CpythonAnalyzer
-from loop_reviewer.reviewer.inventory import RevisionSide
-from loop_reviewer.reviewer.inventory_contract import ChangedFile
+from loop_reviewer.reviewer.inventory import RevisionSide, validated_inventory
+from loop_reviewer.reviewer.inventory_contract import ChangedFile, PinnedComparison
 from loop_reviewer.reviewer.local_check_contract import SourceEvidence, SourceLocation
-from loop_reviewer.reviewer.local_evidence import EvidenceIndex, LocalEvidenceWork
+from loop_reviewer.reviewer.local_evidence import (
+    EvidenceIndex,
+    LocalEvidenceWork,
+    PinnedEvidenceWork,
+)
 from loop_reviewer.reviewer.model_budget import SpendLedger
 from loop_reviewer.reviewer.model_contract import (
     CallQuote,
@@ -31,14 +39,23 @@ from loop_reviewer.reviewer.pinned_source import (
     SearchPaths,
 )
 from loop_reviewer.reviewer.semantic_batch import (
+    COVERAGE_INVESTIGATION_PROMPT,
     run_coverage_batches,
     run_semantic_batch,
 )
 from loop_reviewer.reviewer.semantic_inputs import (
+    Omission,
+    ShownExcerpt,
     build_targeted_bundle,
     canonical_inventory,
 )
-from loop_reviewer.reviewer.semantic_limits import SemanticLimits
+from loop_reviewer.reviewer.semantic_limits import (
+    VERIFY_EVIDENCE,
+    VERIFY_PROMPT,
+    MeteredSource,
+    SemanticLimits,
+)
+from tests.support.inventory_git import PATH_ENV, commit, init
 from tests.test_local_checks import PINS, Source, row
 
 BASE = b"def items():\n    return None\n"
@@ -351,9 +368,12 @@ def test_batch_deduplicates_only_proven_equivalence(distinct: bool) -> None:
 
 
 class CoverageModel(ScriptedModel):
-    def __init__(self, *, omit_first: bool = False) -> None:
+    def __init__(
+        self, *, omit_first: bool = False, anchor_in: str | None = None
+    ) -> None:
         super().__init__()
         self.omit_first = omit_first
+        self.anchor_in = anchor_in
 
     @override
     def send(
@@ -361,6 +381,22 @@ class CoverageModel(ScriptedModel):
     ) -> ModelAttempt:
         self.calls.append(call)
         payload = json.loads(call.prompt.split("\n\n", 1)[1])
+        candidates = []
+        if self.anchor_in is not None:
+            excerpt = payload[self.anchor_in][0]
+            candidates.append(
+                {
+                    "file_id": excerpt["file_ids"][0]
+                    if "file_ids" in excerpt
+                    else excerpt["file_id"],
+                    "changed_behavior": "An entry is added.",
+                    "trigger": "Read the entries.",
+                    "consequence": "The entry appears twice.",
+                    "proposed_impact": "unknown",
+                    "citations": (),
+                    "proposed_anchor_id": excerpt["id"],
+                }
+            )
         raw = json.dumps(
             {
                 "schema_version": 1,
@@ -369,7 +405,7 @@ class CoverageModel(ScriptedModel):
                 "reviewed_file_ids": []
                 if self.omit_first and len(self.calls) == 1
                 else payload["selected_file_ids"],
-                "candidates": [],
+                "candidates": candidates,
             }
         )
         return ModelAttempt(
@@ -515,3 +551,287 @@ def test_unfinished_work_does_not_erase_prior_acknowledgments(first: str) -> Non
     assert {item.file_id for item in result.offered} == {
         file_id for packet in shown for file_id, _ in packet
     }
+
+
+class WrappedCoverageModel(CoverageModel):
+    @override
+    def quote(self, call: ModelCall) -> CallQuote:
+        return replace(
+            super().quote(call),
+            request_body=json.dumps(
+                {
+                    "messages": [{"role": "user", "content": call.prompt}],
+                    "schema": {"type": "object"},
+                }
+            ).encode(),
+        )
+
+
+@pytest.mark.parametrize(
+    "boundary", ["request", "future-evidence", "future-request", "spend", "slack"]
+)
+def test_optional_context_does_not_consume_required_packet_allowance(
+    boundary: str,
+) -> None:
+    prepared = _prepared_changes(b"@@ -0,0 +1,2 @@\n+x\n+x\n", widths=(350, 350))
+    (first, second) = prepared.changed
+    optional = first.source.model_copy(
+        update={
+            "id": "e00003",
+            "text": '\\"\\\\' * 20 + "\n",
+        }
+    )
+    prepared = replace(prepared, supporting=(ShownExcerpt(optional, (first.file_id,)),))
+    packet_limit = 1550
+
+    class MeteredCoverageModel(WrappedCoverageModel):
+        @override
+        def send(
+            self, call: ModelCall, quote: CallQuote, *, timeout_seconds: float
+        ) -> ModelAttempt:
+            response = super().send(call, quote, timeout_seconds=timeout_seconds)
+            if boundary != "spend":
+                return response
+            context = json.loads(call.prompt.split("\n\n", 1)[1])["supporting_excerpts"]
+            return replace(
+                response,
+                usage=TokenUsage(21, 1, 22) if context else TokenUsage(1, 1, 2),
+            )
+
+    model = MeteredCoverageModel()
+    limits = SemanticLimits(120)
+    lines = frozenset((first.coverage, second.coverage))
+    one = build_coverage_packet(prepared, lines, packet_limit, supporting_bytes=0)
+    two = build_coverage_packet(
+        prepared, lines - one.offered, packet_limit, supporting_bytes=0
+    )
+    assert one.offered == {first.coverage} and two.offered == {second.coverage}
+    enriched = build_coverage_packet(prepared, lines, packet_limit)
+    assert optional.id in {item.source.id for item in enriched.bundle.excerpts}
+
+    def request_size(unit: str, evidence_text: str) -> int:
+        prompt = (
+            COVERAGE_INVESTIGATION_PROMPT
+            + f"Investigation ID: {unit}.\n\n"
+            + evidence_text
+        )
+        return len(
+            model.quote(
+                ModelCall("investigation", unit, prompt, output_bytes=8192)
+            ).request_body
+        )
+
+    required_requests = request_size("i00001", one.bundle.evidence_text) + request_size(
+        "i00002", two.bundle.evidence_text
+    )
+    if boundary == "future-evidence":
+        limits.evidence_limit = (
+            VERIFY_EVIDENCE + one.bundle.evidence_bytes + two.bundle.evidence_bytes
+        )
+    elif boundary == "future-request":
+        limits.prompt_limit = VERIFY_PROMPT + required_requests
+    elif boundary == "request":
+        # Leave room for the next required request and some context, but not for the escaped record.
+        extra = enriched.bundle.evidence_bytes - one.bundle.evidence_bytes
+        limits.prompt_limit = VERIFY_PROMPT + required_requests + extra
+        assert (
+            request_size("i00001", enriched.bundle.evidence_text)
+            - request_size("i00001", one.bundle.evidence_text)
+            > extra
+        )
+
+    tokens = model.quote(ModelCall("investigation", "i00001", "test")).tokens
+    budget = (
+        3 * tokens.worst_case + tokens.charge(1, 1) if boundary == "spend" else 1000
+    )
+    result = run_coverage_batches(
+        prepared,
+        model,
+        SpendLedger(budget, lambda: 0, multiple_investigations=True),
+        limits,
+        lambda: 0,
+        packet_bytes=packet_limit,
+    )
+    assert result.acknowledged == lines and result.stop is None
+    assert model.shown_lines() == [[(first.file_id, 1)], [(second.file_id, 2)]]
+    payloads = [json.loads(call.prompt.split("\n\n", 1)[1]) for call in model.calls]
+    assert [bool(payload["supporting_excerpts"]) for payload in payloads] == [
+        boundary == "slack",
+        boundary in {"slack", "spend"},
+    ]
+    if boundary not in {"slack", "spend"}:
+        assert limits.prompt_bytes == required_requests
+
+
+@pytest.mark.parametrize(
+    "prepared_ranges", [False, True], ids=["capped-patch", "rejected-line"]
+)
+def test_coverage_reports_work_limit_when_preparation_prevents_dispatch(
+    prepared_ranges: bool,
+) -> None:
+    prepared = _prepared_changes(b"@@ -0,0 +1 @@\n+x\n", widths=(1,))
+    prepared = replace(
+        prepared,
+        changed=(),
+        required=prepared.required if prepared_ranges else (),
+        omissions=(Omission("p00001", "work_limit"),),
+    )
+    model = CoverageModel()
+    result = run_coverage_batches(
+        prepared,
+        model,
+        SpendLedger(1000, lambda: 0, multiple_investigations=True),
+        SemanticLimits(120),
+        lambda: 0,
+    )
+    assert not model.calls and not result.offered
+    assert result.stop == "work_limit" and result.gaps == {"p00001": "work_limit"}
+
+
+def test_git_packets_keep_renamed_paths_and_one_sided_edits_pinned(
+    tmp_path: Path,
+) -> None:
+    init(tmp_path)
+    unchanged = [f"stable long line {n}\n" for n in range(10)]
+    old_path = tmp_path / "old.ts"
+    old_path.write_text("".join(unchanged))
+    (tmp_path / "retired.go").write_text("removed without newline")
+    base = commit(tmp_path)
+    new_path = tmp_path / "renamed.ts"
+    old_path.rename(new_path)
+    new_path.write_text("".join([*unchanged[:5], "inserted\n", *unchanged[5:]]))
+    (tmp_path / "retired.go").unlink()
+    (tmp_path / "script").write_text("added without newline")
+    (tmp_path / "binary").write_bytes(b"\x00contents")
+    (tmp_path / "symlink").symlink_to("script")
+    (tmp_path / "z-big").write_bytes(b"x" * (65 * 1024))
+    pins = PinnedComparison(merge_base=base, head=commit(tmp_path))
+    new_path.write_text("dirty and not pinned\n")
+    model = CoverageModel(anchor_in="supporting_excerpts")
+    limits = SemanticLimits(120, preparing_investigation=True)
+
+    with open_local_comparison(tmp_path, pins, PATH_ENV) as source:
+        rows = validated_inventory(source, pins)
+        work = PinnedEvidenceWork(
+            MeteredSource(source, limits, lambda: 0), pins, lambda: 0, 120
+        )
+        prepared = prepare_coverage(rows, work, EvidenceIndex())
+        result = run_coverage_batches(
+            prepared,
+            model,
+            SpendLedger(1000, lambda: 0, multiple_investigations=True),
+            limits,
+            lambda: 0,
+        )
+
+    files = {file.path: file for file in prepared.inventory}
+    renamed, deleted, added = (
+        files[path] for path in ("renamed.ts", "retired.go", "script")
+    )
+    assert renamed.change.change_type == "renamed"
+    assert result.reviewed_ids == (renamed.id, deleted.id, added.id)
+    assert result.gaps == {
+        files["symlink"].id: "unsupported_language",
+        files["z-big"].id: "work_limit",
+    }
+    assert result.offered == result.acknowledged and len(result.acknowledged) == 3
+    (call,) = model.calls
+    payload = json.loads(call.prompt.split("\n\n", 1)[1])
+    assert [
+        (
+            item["range"]["side"],
+            item["range"]["commit_id"],
+            item["range"]["path"],
+            item["text"],
+        )
+        for item in payload["changed_excerpts"]
+    ] == [
+        ("head", pins.head, "renamed.ts", "inserted\n"),
+        ("base", pins.merge_base, "retired.go", "removed without newline"),
+        ("head", pins.head, "script", "added without newline"),
+    ]
+    context = payload["supporting_excerpts"]
+    assert {item["file_ids"][0] for item in context} == {renamed.id}
+    assert {
+        (item["range"]["path"], item["range"]["commit_id"]) for item in context
+    } == {("old.ts", pins.merge_base), ("renamed.ts", pins.head)}
+    assert {item["text"] for item in context} == set(unchanged[2:8])
+    ((candidate, origin),) = result.pending
+    assert origin.selected_ids == result.reviewed_ids
+    assert candidate.file_id == renamed.id and candidate.proposed_anchor_id is None
+
+
+@pytest.mark.parametrize("mode", ["reserved", "available", "deadline"])
+def test_coverage_batch_looks_up_text_only_with_retrieval_headroom(
+    tmp_path: Path, mode: str
+) -> None:
+    init(tmp_path)
+    edited = tmp_path / "edit.go"
+    edited.write_text("func io() int { return 1 }\n")
+    (tmp_path / "consumer").write_text("use(io())\n")
+    base = commit(tmp_path)
+    edited.write_text("func io() int { return 2 }\n")
+    pins = PinnedComparison(merge_base=base, head=commit(tmp_path))
+    model = CoverageModel()
+    limits = SemanticLimits(2, preparing_investigation=True)
+    elapsed = 0.0
+    timeouts: list[float] = []
+
+    def clock() -> float:
+        return elapsed
+
+    class SlowSearch(MeteredSource):
+        @override
+        def search(
+            self,
+            side: RevisionSide,
+            literal: str,
+            *,
+            max_paths: int,
+            max_bytes: int,
+            timeout_seconds: float,
+            regular_text: bool = False,
+        ) -> SearchPaths | ReadFailure:
+            nonlocal elapsed
+            timeouts.append(timeout_seconds)
+            elapsed += timeout_seconds
+            return "limit_reached"
+
+    with open_local_comparison(tmp_path, pins, PATH_ENV) as source:
+        adapter = (SlowSearch if mode == "deadline" else MeteredSource)(
+            source, limits, clock
+        )
+        work = PinnedEvidenceWork(adapter, pins, clock, limits.deadline)
+        prepared = prepare_coverage(
+            validated_inventory(source, pins), work, EvidenceIndex()
+        )
+        required_bytes = limits.retrieved_bytes
+        room = 0 if mode == "reserved" else 4096
+        limits.combined_limit = required_bytes + limits.prompt_limit + room
+        result = run_coverage_batches(
+            prepared,
+            model,
+            SpendLedger(1000, clock, multiple_investigations=True),
+            limits,
+            clock,
+        )
+    assert (
+        result.reviewed_ids == ("p00001",) and not result.gaps and result.stop is None
+    )
+    (call,) = model.calls
+    payload = json.loads(call.prompt.split("\n\n", 1)[1])
+    assert [item["text"] for item in payload["changed_excerpts"]] == [
+        "func io() int { return 1 }\n",
+        "func io() int { return 2 }\n",
+    ]
+    matches = payload["supporting_excerpts"]
+    if mode == "available":
+        assert [(item["role"], item["text"]) for item in matches] == [
+            ("text_match", "use(io())\n"),
+            ("text_match", "use(io())\n"),
+        ]
+        assert required_bytes < limits.retrieved_bytes <= required_bytes + room
+    else:
+        assert matches == [] and limits.retrieved_bytes == required_bytes
+    if mode == "deadline":
+        assert timeouts == [1.0] and elapsed < limits.deadline

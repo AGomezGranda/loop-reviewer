@@ -44,7 +44,13 @@ def _pr(
         repo.address.host, repo.address.slug, number, repository_id=repo.repository_id
     )
     return DiscoveredPullRequest(
-        ref, title, "bob", "open", False, ("alice",) if requested else ()
+        ref,
+        title,
+        "bob",
+        "open",
+        False,
+        ("alice",) if requested else (),
+        20 if repo == _OTHER else number * 10,
     )
 
 
@@ -233,7 +239,7 @@ def test_partial_failure_shows_stale_only_with_access(
 
 
 @pytest.mark.parametrize("published", [False, True], ids=["local", "published"])
-def test_completion_hides_cached_row_and_requested_reviews_sort_first(
+def test_completion_hides_cached_row_and_newest_opened_sort_first(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     github: FakeDiscovery,
@@ -264,9 +270,9 @@ def test_completion_hides_cached_row_and_requested_reviews_sort_first(
     assert _run(monkeypatch, "scan") == 0
     output = capsys.readouterr().out
     assert (
-        output.index("Direct request")
+        output.index("Prefix match")
+        < output.index("Direct request")
         < output.index("Earlier")
-        < output.index("Prefix match")
     )
     assert "Last saved: draft ready" in output
     if published:
@@ -312,7 +318,7 @@ def test_scan_projects_newer_attempt_instead_of_losing_result(
         repository: WatchedRepository,
     ) -> tuple[DiscoveredPullRequest, ...]:
         # Simulate an older process that writes scan tickets without the shared lock.
-        ticket = store.begin_scan(settings.version, repository.key)
+        ticket = store.begin_scan(settings.scan_version, repository.key)
         assert ticket is not None
         if newer_outcome == "interrupted":
             assert store.record_scan(
@@ -515,7 +521,7 @@ def test_watch_retries_superseded_scan_and_only_nudges_for_new_or_changed_active
             store = SqliteInboxStore(tmp_path / "loop-reviewer" / "reviews.sqlite3")
             settings = store.settings()
             assert settings is not None
-            store.replace_settings(settings.projects, settings.repositories)
+            store.replace_settings(settings.projects, (repository,))
         return original(repository)
 
     def monotonic() -> float:

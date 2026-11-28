@@ -3,6 +3,7 @@
 import re
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
+from datetime import datetime
 from typing import cast
 
 from loop_reviewer.inbox.discovery import RepositoryDiscoveryError
@@ -170,16 +171,21 @@ def _pull_request(repo: WatchedRepository, value: object) -> DiscoveredPullReque
     number, title, state, draft = (
         data.get(name) for name in ("number", "title", "state", "draft")
     )
+    created = data.get("created_at")
     reviewers = data.get("requested_reviewers")
     if (
         type(number) is not int
         or not 0 < number < 2**63
+        or not isinstance(created, str)
         or not isinstance(title, str)
         or not isinstance(state, str)
         or state not in {"open", "closed"}
         or type(draft) is not bool
         or not isinstance(reviewers, list)
     ):
+        raise ValueError
+    opened = datetime.fromisoformat(created)
+    if opened.tzinfo is None:
         raise ValueError
     ref = PullRequestRef.from_repository(
         repo.address.host, repo.address.slug, number, repository_id=base
@@ -194,6 +200,7 @@ def _pull_request(repo: WatchedRepository, value: object) -> DiscoveredPullReque
             _login(_object(user).get("login"))
             for user in cast("list[object]", reviewers)
         ),
+        int(opened.timestamp()),
     )
 
 

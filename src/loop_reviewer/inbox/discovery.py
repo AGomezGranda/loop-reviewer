@@ -5,7 +5,11 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Protocol
 
-from loop_reviewer.inbox.configuration import InboxInputs, saved_inbox_inputs
+from loop_reviewer.inbox.configuration import (
+    InboxInputs,
+    LocalSettings,
+    saved_inbox_inputs,
+)
 from loop_reviewer.inbox.model import (
     DiscoveredPullRequest,
     InboxReport,
@@ -78,12 +82,40 @@ class ConfigureInbox:
                 )
         return repositories
 
+    def verify_explicit_save(
+        self,
+        desired: InboxInputs,
+        current: LocalSettings,
+        saved: InboxSettings | None,
+        *,
+        repairing: bool,
+    ) -> tuple[WatchedRepository, ...]:
+        projects, addresses, terms = desired
+        if (
+            not repairing
+            and saved is not None
+            and (projects, addresses) == (current.projects, current.addresses)
+            and (projects, addresses) == saved_inbox_inputs(saved)[:2]
+            and terms != current.excluded_title_terms
+        ):
+            return saved.repositories
+        if not any(desired):
+            if current.projects:
+                raise ValueError(
+                    "Configure a Jira project key and at least one repository."
+                )
+            if not repairing:
+                return ()
+        return self.verify(projects, addresses)
+
     def verify_manual_edit(
         self, desired: InboxInputs, saved: InboxSettings | None
     ) -> tuple[WatchedRepository, ...]:
         if desired == saved_inbox_inputs(saved):
             return ()
-        projects, addresses = desired
+        projects, addresses, _ = desired
+        if saved and desired[:2] == saved_inbox_inputs(saved)[:2]:
+            return saved.repositories
         verified = self.verify(projects, addresses)
         if saved is not None:
             accounts = {repo.address.host: repo.account for repo in saved.repositories}
@@ -133,7 +165,7 @@ class ScanInbox:
         if settings is None:
             raise InboxNotConfigured
         for repository in settings.repositories:
-            ticket = self._store.begin_scan(settings.version, repository.key)
+            ticket = self._store.begin_scan(settings.scan_version, repository.key)
             if ticket is None:
                 raise ScanSuperseded
             try:
@@ -148,7 +180,7 @@ class ScanInbox:
                 except InboxStoreError:
                     pass  # Preserve the interrupt if local state could not be updated.
                 raise
-        return self._read.run(expected_version=settings.version)
+        return self._read.run(expected_scan_version=settings.scan_version)
 
     def _check(
         self, repository: WatchedRepository, projects: tuple[JiraProjectKey, ...]
@@ -168,21 +200,27 @@ class ReadInbox:
         self._store = store
         self._reviews = reviews
 
-    def run(self, *, expected_version: int | None = None) -> InboxReport:
-        version = expected_version
-        if version is None:
-            settings = self._store.settings()
-            if settings is None:
-                raise InboxNotConfigured
+    def run(self, *, expected_scan_version: int | None = None) -> InboxReport:
+        settings = self._store.settings()
+        if settings is None:
+            raise InboxNotConfigured
+        attempts = 2 if expected_scan_version is not None else 1
+        for _ in range(attempts):
+            if settings is None or (
+                expected_scan_version is not None
+                and settings.scan_version != expected_scan_version
+            ):
+                break
             version = settings.version
-        snapshot = self._store.snapshot(version)
-        if snapshot is None:
-            raise ScanSuperseded
-        report = self._project(snapshot)
-        current = self._store.settings()
-        if current is None or current.version != version:
-            raise ScanSuperseded
-        return report
+            snapshot = self._store.snapshot(version)
+            if snapshot is not None:
+                report = self._project(snapshot)
+                settings = self._store.settings()
+                if settings is not None and settings.version == version:
+                    return report
+            else:
+                settings = self._store.settings()
+        raise ScanSuperseded
 
     def _project(self, snapshot: InboxSnapshot) -> InboxReport:
         candidates = [
@@ -198,6 +236,7 @@ class ReadInbox:
             )
             if repo.last_success is not None
             for row in repo.last_success.eligible_rows
+            if not snapshot.settings.excludes(row.title)
         ]
         activity = self._reviews.activity(
             tuple(identity for _, _, identity in candidates)

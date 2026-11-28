@@ -21,7 +21,6 @@ from loop_reviewer.reviewer.discussion_contract import (
     unavailable_discussion,
 )
 from loop_reviewer.reviewer.integrations.git_inventory import open_local_comparison
-from loop_reviewer.reviewer.integrations.python_analyzer import CpythonAnalyzer
 from loop_reviewer.reviewer.inventory import validated_inventory
 from loop_reviewer.reviewer.inventory_contract import InventoryBudget, PinnedComparison
 from loop_reviewer.reviewer.pinned_source import PinnedSource
@@ -251,13 +250,17 @@ def test_hosted_review_keeps_pins_and_gaps_without_provider(
     generated = HostedReportReviewer(
         open_source,
         discussion,
-        CpythonAnalyzer(),
         lambda: (InventoryBudget(max_model_spend_usd_micros=amount), None, None),
         monotonic,
     ).review(selection)
     assert generated.report is not None
     report = generated.report.root
-    assert report.status == "partial"
+    assert (report.schema_version, report.policy_version, report.status) == (
+        6,
+        4,
+        "partial",
+    )
+    assert [item.kind for item in report.investigation_coverage] == ["behavior"]
     assert report.discussion_status == "unavailable"
     assert [
         (row.new.path if row.new else None, row.reason) for row in report.file_coverage

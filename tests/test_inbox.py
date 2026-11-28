@@ -4,9 +4,10 @@ from pathlib import Path
 import pytest
 
 from loop_reviewer.inbox.actions import InboxActions
-from loop_reviewer.inbox.discovery import ReadInbox
+from loop_reviewer.inbox.discovery import ReadInbox, ScanInbox
 from loop_reviewer.inbox.model import (
     DiscoveredPullRequest,
+    InboxReason,
     JiraProjectKey,
     RepositoryAddress,
     WatchedRepository,
@@ -14,8 +15,14 @@ from loop_reviewer.inbox.model import (
 from loop_reviewer.inbox.store import FailedScan, SuccessfulScan
 from loop_reviewer.integrations.local_state.sqlite_inbox import SqliteInboxStore
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
-from loop_reviewer.review.model import GeneratedReview, ReviewDraft, ReviewSelection
+from loop_reviewer.review.model import (
+    GeneratedReview,
+    ReviewDraft,
+    ReviewIdentity,
+    ReviewSelection,
+)
 from loop_reviewer.review.pull_request import PullRequestRef, ReviewedRevision
+from loop_reviewer.review.store import ReviewActivity
 
 
 @pytest.mark.parametrize(
@@ -66,7 +73,11 @@ def test_invalid_repository_url(url: str) -> None:
             "open",
             False,
             ("ALICE",),
-            ("Your review was requested", "Your PR", "Matches [ABC-…]"),
+            (
+                InboxReason("direct_request", "Your review was requested"),
+                InboxReason("authored", "Your PR"),
+                InboxReason("jira_project", "Matches [ABC-…]"),
+            ),
             id="all-reasons",
         ),
         pytest.param(
@@ -75,11 +86,17 @@ def test_invalid_repository_url(url: str) -> None:
             "open",
             False,
             ("ALICE",),
-            ("Your review was requested",),
+            (InboxReason("direct_request", "Your review was requested"),),
             id="direct-request",
         ),
         pytest.param(
-            "Other work", "Alice", "open", False, (), ("Your PR",), id="own-pr"
+            "Other work",
+            "Alice",
+            "open",
+            False,
+            (),
+            (InboxReason("authored", "Your PR"),),
+            id="own-pr",
         ),
         pytest.param("Other work", "bob", "open", False, (), (), id="unrelated"),
         pytest.param(
@@ -94,7 +111,7 @@ def test_eligibility(
     state: str,
     draft: bool,
     requested: tuple[str, ...],
-    expected: tuple[str, ...],
+    expected: tuple[InboxReason, ...],
 ) -> None:
     pr = DiscoveredPullRequest(
         PullRequestRef("github.com", "a", "b", 1, 22),
@@ -107,6 +124,73 @@ def test_eligibility(
     assert pr.reasons((JiraProjectKey("ABC"),), "alice") == expected
 
 
+@pytest.mark.parametrize("phase", ["discovery", "projection"])
+def test_title_only_edit_during_scan_keeps_results_for_all_repositories(
+    tmp_path: Path,
+    phase: str,
+) -> None:
+    path = tmp_path / "state" / "reviews.sqlite3"
+    inbox = SqliteInboxStore(path)
+    projects = (JiraProjectKey("ABC"),)
+    first = WatchedRepository(RepositoryAddress("github.com", "org/first"), 10, "alice")
+    second = WatchedRepository(
+        RepositoryAddress("github.com", "org/second"), 20, "alice"
+    )
+    before = inbox.replace_settings(projects, (first, second))
+
+    def add_filter() -> None:
+        SqliteInboxStore(path).replace_settings(
+            projects, (first, second), excluded_title_terms=("ignore me",)
+        )
+
+    class Discovery:
+        def verify(self, address: RepositoryAddress) -> WatchedRepository:
+            pytest.fail(f"Unexpected verification of {address.url}")
+
+        def list_open(
+            self, repository: WatchedRepository
+        ) -> tuple[DiscoveredPullRequest, ...]:
+            if repository == first and phase == "discovery":
+                add_filter()
+            return tuple(
+                DiscoveredPullRequest(
+                    PullRequestRef.from_repository(
+                        repository.address.host,
+                        repository.address.slug,
+                        number,
+                        repository_id=repository.repository_id,
+                    ),
+                    title,
+                    "bob",
+                    "open",
+                    False,
+                    ("alice",),
+                )
+                for number, title in enumerate(("Keep", "Ignore me"), 1)
+            )
+
+    class Activity:
+        changed = False
+
+        def activity(
+            self, identities: tuple[ReviewIdentity, ...]
+        ) -> dict[ReviewIdentity, ReviewActivity]:
+            if phase == "projection" and not self.changed:
+                self.changed = True
+                add_filter()
+            return {}
+
+    report = ScanInbox(
+        Discovery(), inbox, Activity(), now=lambda: datetime.now(UTC)
+    ).run()
+    assert report.succeeded
+    assert report.settings.version > before.version
+    assert [row.pull_request.title for row in report.active] == ["Keep", "Keep"]
+    cleared = inbox.replace_settings(projects, (first, second))
+    assert cleared.scan_version == before.scan_version
+    assert len(ReadInbox(inbox, SqliteReviewRunStore(path)).run().active) == 4
+
+
 def test_read_inbox_reflects_local_actions_without_discovery(tmp_path: Path) -> None:
     path = tmp_path / "reviews.sqlite3"
     inbox = SqliteInboxStore(path)
@@ -117,8 +201,8 @@ def test_read_inbox_reflects_local_actions_without_discovery(tmp_path: Path) -> 
     settings = inbox.replace_settings((JiraProjectKey("ABC"),), (good, failed, pending))
     ref = PullRequestRef("github.com", "a", "b", 1, 10)
     row = DiscoveredPullRequest(ref, "[ABC-1] Fix", "bob", "open", False, ())
-    first = inbox.begin_scan(settings.version, good.key)
-    second = inbox.begin_scan(settings.version, failed.key)
+    first = inbox.begin_scan(settings.scan_version, good.key)
+    second = inbox.begin_scan(settings.scan_version, failed.key)
     assert first is not None and second is not None
     now = datetime.now(UTC)
     inbox.record_scan(first, SuccessfulScan(now, (row,)))

@@ -14,10 +14,8 @@ from loop_reviewer.review.model import (
     ReviewSelection,
 )
 from loop_reviewer.reviewer.discussion_contract import DiscussionSnapshotV1
-from loop_reviewer.reviewer.full_review_contract import (
-    FullReviewRequest,
-    FullReviewResult,
-)
+from loop_reviewer.reviewer.full_review_v6 import FullReviewRequestV6
+from loop_reviewer.reviewer.hosted_report_contract import HostedReport
 from loop_reviewer.reviewer.inventory_contract import (
     InventoryBudget,
     PinnedComparison,
@@ -26,8 +24,7 @@ from loop_reviewer.reviewer.inventory_contract import (
 from loop_reviewer.reviewer.local_check_contract import SourceLocation
 from loop_reviewer.reviewer.model_contract import ReviewModel
 from loop_reviewer.reviewer.pinned_source import PinnedSource
-from loop_reviewer.reviewer.python_context import PythonAnalyzer
-from loop_reviewer.reviewer.semantic_review import review_full
+from loop_reviewer.reviewer.semantic_review import review_full_v6
 
 
 class HostedReportReviewer:
@@ -37,7 +34,6 @@ class HostedReportReviewer:
             [ReviewSelection, PinnedComparison], AbstractContextManager[PinnedSource]
         ],
         capture_discussion: Callable[[ReviewSelection], DiscussionSnapshotV1],
-        analyzer: PythonAnalyzer,
         model_settings: Callable[
             [], tuple[InventoryBudget, ReviewModel | None, str | None]
         ],
@@ -45,15 +41,14 @@ class HostedReportReviewer:
     ) -> None:
         self._open_source = open_source
         self._capture_discussion = capture_discussion
-        self._analyzer = analyzer
         self._model_settings = model_settings
         self._monotonic = monotonic
 
     def review(self, selection: ReviewSelection) -> GeneratedReview:
         budget, model, model_id = self._model_settings()
         revision = selection.revision
-        request = FullReviewRequest(
-            schema_version=5,
+        request = FullReviewRequestV6(
+            schema_version=6,
             scope="full_review",
             comparison=PinnedComparison(
                 merge_base=revision.merge_base, head=revision.head
@@ -61,10 +56,9 @@ class HostedReportReviewer:
             budget=budget,
             discussion=self._capture_discussion(selection),
         )
-        report = review_full(
+        report = review_full_v6(
             request,
             lambda pins: self._open_source(selection, pins),
-            self._analyzer,
             model,
             self._monotonic,
         )
@@ -78,7 +72,7 @@ class HostedReportReviewer:
         )
 
 
-def project_report(report: FullReviewResult) -> ReviewDraft:
+def project_report(report: HostedReport) -> ReviewDraft:
     original = report.root
     if original.status == "failed":
         raise ReviewerError(

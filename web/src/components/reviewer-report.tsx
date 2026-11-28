@@ -1,7 +1,7 @@
 import type { components } from "@/api/schema";
 import { ReviewRecommendation } from "@/components/review-recommendation";
 
-type Report = components["schemas"]["FullReviewResult"];
+type Report = components["schemas"]["HostedReport"];
 
 export function ReviewerReport({ report }: { report: Report | null }) {
 	if (!report)

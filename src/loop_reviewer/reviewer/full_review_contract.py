@@ -44,8 +44,8 @@ def text_eligible(row: ChangedFile) -> bool:
     )
 
 
-class FullReviewRequest(_Record):
-    schema_version: _V5
+class _FullReviewRequest(_Record):
+    schema_version: int
     scope: Literal["full_review"]
     comparison: PinnedComparison
     budget: InventoryBudget
@@ -53,17 +53,24 @@ class FullReviewRequest(_Record):
 
     @model_validator(mode="after")
     def matching_pins(self) -> Self:
+        self.require_matching_pins()
+        return self
+
+    def require_matching_pins(self) -> None:
         if (
             self.discussion is not None
             and self.comparison != self.discussion.target.comparison
         ):
             raise ValueError("Discussion comparison must match the review pins")
-        return self
+
+
+class FullReviewRequest(_FullReviewRequest):
+    schema_version: _V5
 
 
 class _Common(_Record):
-    schema_version: _V5
-    policy_version: _Policy
+    schema_version: int
+    policy_version: int
     scope: Literal["full_review"]
     comparison: PinnedComparison
     discussion: DiscussionSummary | None
@@ -103,6 +110,8 @@ class _Reviewed(DiscussionReviewedPayload, _Common):
         self.validate_discussion_references(self.discussion)
         return self
 
+
+class _ReviewedV5(_Reviewed):
     @staticmethod
     @override
     def _file_outcome(
@@ -153,7 +162,7 @@ class _Reviewed(DiscussionReviewedPayload, _Common):
             raise ValueError("File outcome must reflect its investigations")
 
 
-class CompleteFullReview(_Reviewed):
+class _Complete(_Reviewed):
     status: Literal["complete"]
     stop_reason: Literal["finished"]
 
@@ -168,7 +177,7 @@ class CompleteFullReview(_Reviewed):
         return self
 
 
-class PartialFullReview(_Reviewed):
+class _Partial(_Reviewed):
     status: Literal["partial"]
     stop_reason: Literal["finished", "work_limit", "budget_exhausted"]
 
@@ -194,7 +203,7 @@ class PartialFullReview(_Reviewed):
         return self
 
 
-class FailedFullReview(_Common):
+class _Failed(_Common):
     status: Literal["failed"]
     stop_reason: Literal["fatal_error"]
     error: InventoryError | InvalidReport
@@ -214,6 +223,21 @@ class FailedFullReview(_Common):
         return self
 
 
+class CompleteFullReview(_ReviewedV5, _Complete):
+    schema_version: _V5
+    policy_version: _Policy
+
+
+class PartialFullReview(_ReviewedV5, _Partial):
+    schema_version: _V5
+    policy_version: _Policy
+
+
+class FailedFullReview(_Failed):
+    schema_version: _V5
+    policy_version: _Policy
+
+
 class FullReviewResult(
     RootModel[
         Annotated[
@@ -230,28 +254,34 @@ def render_v5(
     snapshot: DiscussionSnapshotV1 | None,
     details: DiscussionDetails,
 ) -> FullReviewResult:
+    return FullReviewResult.model_validate(
+        discussion_payload(payload, snapshot, details)
+        | {"schema_version": 5, "policy_version": 3}
+    )
+
+
+def discussion_payload(
+    payload: dict[str, object],
+    snapshot: DiscussionSnapshotV1 | None,
+    details: DiscussionDetails,
+) -> dict[str, object]:
     if snapshot is not None and payload["status"] != "failed":
         if snapshot.status != "complete" or details.omissions:
             payload = payload | {"status": "partial"}
         if details.omissions and payload["stop_reason"] == "finished":
             payload = payload | {"stop_reason": "work_limit"}
-    return FullReviewResult.model_validate(
-        payload
-        | {
-            "schema_version": 5,
-            "policy_version": 3,
-            "discussion_status": snapshot.status
-            if snapshot is not None
-            else "not_requested",
-            "discussion": DiscussionSummary(
-                target=snapshot.target,
-                captured_at=snapshot.captured_at,
-                capture_omissions=snapshot.omissions,
-                mapping_omissions=details.omissions,
-            )
-            if snapshot is not None
-            else None,
-            "discussion_references": details.references,
-            "linked_existing_threads": details.links,
-        }
-    )
+    return payload | {
+        "discussion_status": snapshot.status
+        if snapshot is not None
+        else "not_requested",
+        "discussion": DiscussionSummary(
+            target=snapshot.target,
+            captured_at=snapshot.captured_at,
+            capture_omissions=snapshot.omissions,
+            mapping_omissions=details.omissions,
+        )
+        if snapshot is not None
+        else None,
+        "discussion_references": details.references,
+        "linked_existing_threads": details.links,
+    }

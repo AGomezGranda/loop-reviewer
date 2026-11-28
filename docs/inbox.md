@@ -21,9 +21,13 @@ Browser and CLI setup write to the same TOML file after `gh` can list PRs in eve
 
 A PR must be open and non-draft, and at least one of these must apply:
 
-- Your review was requested directly. These PRs sort first.
+- Your review was requested directly.
 - You authored it.
 - Its title starts with a bracketed ticket for the configured Jira project, such as `[ABC-123]`. Setup normalizes the key to uppercase. The title must match the key exactly and use ASCII digits for the issue number.
+
+Both queues show the most recently opened PRs first across watched repositories. In the browser, select **Newest first** to switch to **Oldest first**, or **Requested from me** to show only direct requests. Repository counts follow the selected queue and request filter. Hover over the opening age or focus the PR link to see the exact opening time.
+
+In **Setup**, enter one word or phrase per line under **Exclude PR titles containing**. A match anywhere in the title hides the PR from both queues, including direct review requests. Matching ignores capitalization. Clear the field and save to show those PRs again.
 
 Completed initial reviews stay out of the inbox, even after a push. **Last saved** describes local review history; it doesn’t tell you whether the draft matches the current revision or a review process is still running. Each repository shows its last successful scan and any current error. Cached rows are marked stale when a refresh fails, or hidden if repository access or identity can’t be verified.
 

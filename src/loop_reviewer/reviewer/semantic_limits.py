@@ -76,10 +76,34 @@ class SemanticLimits:
             self.hit_limit = True
             raise WorkLimit
 
+    def retrieval_capacity(self) -> int:
+        if self.preparing_investigation:
+            return max(
+                0,
+                min(
+                    self.retrieval_left,
+                    self.combined_limit - self.prompt_limit - self.retrieved_bytes,
+                ),
+            )
+        return self.retrieval_left
+
+    def optional_retrieval_limit(self) -> int:
+        prompt_left = max(0, self.prompt_limit - self.prompt_bytes)
+        return max(0, self.retrieval_left - prompt_left)
+
     def preparation_limit(self, *, investigation: bool) -> int:
         rest = self.evidence_limit - self.evidence_bytes
         return max(
             0, rest - VERIFY_EVIDENCE if investigation else min(rest, VERIFY_EVIDENCE)
+        )
+
+    def request_capacity(self, *, investigation: bool) -> int:
+        remaining = min(self.retrieval_left, self.prompt_limit - self.prompt_bytes)
+        return max(
+            0,
+            remaining - VERIFY_PROMPT
+            if investigation
+            else min(remaining, VERIFY_PROMPT),
         )
 
     def output_cap(self, *, investigation: bool) -> int:
@@ -97,14 +121,9 @@ class SemanticLimits:
             and (evidence > VERIFY_EVIDENCE or request > VERIFY_PROMPT)
         ):
             raise VerificationPacketLimit
-        evidence_cap = self.preparation_limit(investigation=investigation)
-        remaining = self.prompt_limit - self.prompt_bytes
-        prompt_cap = min(self.retrieval_left, remaining)
-        if investigation:
-            prompt_cap -= VERIFY_PROMPT
-        else:
-            prompt_cap = min(prompt_cap, VERIFY_PROMPT)
-        fits = evidence <= evidence_cap and request <= prompt_cap
+        fits = evidence <= self.preparation_limit(
+            investigation=investigation
+        ) and request <= self.request_capacity(investigation=investigation)
         if trim and not fits:
             raise VerificationPacketLimit
         if fits or not self.preserve_verification_reserve:
@@ -139,15 +158,7 @@ class MeteredSource(PinnedSource):
 
     def _allocate(self, max_bytes: int) -> int:
         self._limits.check_time(self._monotonic)
-        remaining = self._limits.retrieval_left
-        if self._limits.preparing_investigation:
-            remaining = min(
-                remaining,
-                self._limits.combined_limit
-                - self._limits.prompt_limit
-                - self._limits.retrieved_bytes,
-            )
-        size = min(max_bytes, remaining)
+        size = min(max_bytes, self._limits.retrieval_capacity())
         if size <= 0:
             self._limits.hit_limit = True
             raise WorkLimit

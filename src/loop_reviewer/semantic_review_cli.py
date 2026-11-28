@@ -11,6 +11,7 @@ from loop_reviewer.reviewer.discussion_contract import (
 )
 from loop_reviewer.reviewer.discussion_report import DiscussionReviewRequest
 from loop_reviewer.reviewer.full_review_contract import FullReviewRequest
+from loop_reviewer.reviewer.full_review_v6 import FullReviewRequestV6
 from loop_reviewer.reviewer.integrations.git_inventory import open_local_comparison
 from loop_reviewer.reviewer.integrations.openai_profiles import QUALIFIED_PROFILE
 from loop_reviewer.reviewer.integrations.openai_review import OpenAIReview
@@ -23,6 +24,7 @@ from loop_reviewer.reviewer.inventory_contract import (
 from loop_reviewer.reviewer.semantic_contract import SemanticReviewRequest
 from loop_reviewer.reviewer.semantic_review import (
     review_full,
+    review_full_v6,
     review_semantic,
     review_semantic_with_discussion,
 )
@@ -36,7 +38,7 @@ def main() -> int:
     parser.add_argument("--merge-base", required=True)
     parser.add_argument("--head", required=True)
     parser.add_argument("--max-model-spend-usd-micros", type=int, default=0)
-    parser.add_argument("--report-version", type=int, choices=(3, 4, 5), default=5)
+    parser.add_argument("--report-version", type=int, choices=(3, 4, 5, 6), default=5)
     parser.add_argument(
         "--discussion-snapshot",
         type=Path,
@@ -84,7 +86,7 @@ def main() -> int:
     if (
         args.allow_provider
         and budget.max_model_spend_usd_micros
-        and args.report_version == 5
+        and args.report_version in (5, 6)
         and QUALIFIED_PROFILE is not None
     ):
         key = os.environ.get("OPENAI_API_KEY", "")
@@ -94,8 +96,20 @@ def main() -> int:
     def open_source(pins: PinnedComparison):
         return open_local_comparison(args.repo, pins, environment)
 
-    analyzer = CpythonAnalyzer()
-    if args.report_version == 5:
+    if args.report_version == 6:
+        report = review_full_v6(
+            FullReviewRequestV6(
+                schema_version=6,
+                scope="full_review",
+                comparison=comparison,
+                budget=budget,
+                discussion=snapshot,
+            ),
+            open_source,
+            model,
+            monotonic,
+        )
+    elif args.report_version == 5:
         report = review_full(
             FullReviewRequest(
                 schema_version=5,
@@ -105,7 +119,7 @@ def main() -> int:
                 discussion=snapshot,
             ),
             open_source,
-            analyzer,
+            CpythonAnalyzer(),
             model,
             monotonic,
         )
@@ -119,7 +133,7 @@ def main() -> int:
                 discussion=snapshot,
             ),
             open_source,
-            analyzer,
+            CpythonAnalyzer(),
             model,
             monotonic,
         )
@@ -133,7 +147,7 @@ def main() -> int:
                 discussion=None,
             ),
             open_source,
-            analyzer,
+            CpythonAnalyzer(),
             model,
             monotonic,
         )

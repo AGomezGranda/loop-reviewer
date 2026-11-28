@@ -48,7 +48,7 @@ def row_lines(row: InboxRow) -> tuple[str, str, str]:
         f"Last saved: {_STATUS[row.last_saved]}" if row.last_saved else "Not started"
     )
     stale = "[Stale] " if row.stale else ""
-    reasons = "; ".join(row.reasons)
+    reasons = "; ".join(reason.label for reason in row.reasons)
     return (
         f"{stale}{terminal_text(pr.title)} — {ref.owner}/{ref.repo} #{ref.number} by {terminal_text(pr.author)}",
         f"  {status} — {reasons} — {ref.url}",

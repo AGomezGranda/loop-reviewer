@@ -17,7 +17,7 @@ from loop_reviewer.review.model import ReviewIdentity
 from loop_reviewer.review.pull_request import PullRequestRef
 
 _REPO = WatchedRepository(RepositoryAddress("github.com", "org/repo"), 22, "alice")
-_SETTINGS = InboxSettings((JiraProjectKey("ABC"),), (_REPO,), 1)
+_SETTINGS = InboxSettings((JiraProjectKey("ABC"),), (_REPO,), version=1, scan_version=1)
 _FAILURE = InboxReport(
     _SETTINGS,
     (RepositoryScanStatus(_REPO, "failed", None, "Temporary failure", 0),),

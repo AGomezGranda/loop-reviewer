@@ -14,7 +14,7 @@ from loop_reviewer.review.pull_request import (
 )
 
 if TYPE_CHECKING:
-    from loop_reviewer.reviewer.full_review_contract import FullReviewResult
+    from loop_reviewer.reviewer.hosted_report_contract import HostedReport
 
 Severity = Literal["high", "medium", "low"]
 Verdict = Literal["approved", "comment"]
@@ -285,7 +285,7 @@ class ReviewSelection:
 
 
 def require_report_association(
-    report: FullReviewResult | None, selection: ReviewSelection, draft: ReviewDraft
+    report: HostedReport | None, selection: ReviewSelection, draft: ReviewDraft
 ) -> None:
     if report is None:
         if (
@@ -336,7 +336,7 @@ class GeneratedReview:
     draft: ReviewDraft
     model: str | None
     estimated_cost_usd: float | None
-    report: FullReviewResult | None = None
+    report: HostedReport | None = None
 
 
 @dataclass(frozen=True)
@@ -347,7 +347,7 @@ class SavedDraft:
     draft: ReviewDraft
     generation_model: str | None = None
     estimated_cost_usd: float | None = None
-    report: FullReviewResult | None = None
+    report: HostedReport | None = None
 
 
 @dataclass(frozen=True)
@@ -358,7 +358,7 @@ class CompletedReview:
     receipt: PublicationReceipt | None = None
     generation_model: str | None = None
     estimated_cost_usd: float | None = None
-    report: FullReviewResult | None = None
+    report: HostedReport | None = None
 
     @property
     def publication_status(self) -> Literal["not_published", "published"]:
@@ -381,7 +381,7 @@ class ReviewRun:
     failure_kind: ReviewerFailureKind | None = None
     generation_model: str | None = None
     estimated_cost_usd: float | None = None
-    report: FullReviewResult | None = None
+    report: HostedReport | None = None
 
     def __post_init__(self) -> None:
         if (self.status == "draft_ready") != (self.draft is not None):

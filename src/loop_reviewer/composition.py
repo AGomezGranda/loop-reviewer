@@ -53,7 +53,6 @@ from loop_reviewer.reviewer.discussion_contract import (
 from loop_reviewer.reviewer.integrations.git_inventory import open_local_comparison
 from loop_reviewer.reviewer.integrations.openai_profiles import QUALIFIED_PROFILE
 from loop_reviewer.reviewer.integrations.openai_review import OpenAIReview
-from loop_reviewer.reviewer.integrations.python_analyzer import CpythonAnalyzer
 from loop_reviewer.reviewer.inventory_contract import (
     MAX_RUNTIME_SPEND,
     InventoryBudget,
@@ -185,7 +184,6 @@ class Workflows:
                 return HostedReportReviewer(
                     open_source,
                     self.capture_discussion,
-                    CpythonAnalyzer(),
                     lambda: _hosted_model(self._model_environment),
                     monotonic,
                 )

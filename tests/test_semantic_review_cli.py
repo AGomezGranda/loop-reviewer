@@ -6,11 +6,14 @@ from typing import TypedDict
 
 import pytest
 
+from loop_reviewer import semantic_review_cli
 from loop_reviewer.semantic_review_cli import main
 from tests.support.inventory_git import commit, init, revision
 
 
-@pytest.mark.parametrize("version", [3, 5], ids=["legacy-v3", "default-v5"])
+@pytest.mark.parametrize(
+    "version", [3, 5, 6], ids=["legacy-v3", "default-v5", "opt-in-v6"]
+)
 def test_standalone_semantic_entrypoint_is_registered_and_model_optional(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -39,8 +42,14 @@ def test_standalone_semantic_entrypoint_is_registered_and_model_optional(
         "--head",
         revision(tmp_path, "HEAD"),
     ]
-    if version == 3:
-        args += ["--report-version", "3"]
+    if version != 5:
+        args += ["--report-version", str(version)]
+    if version == 6:
+        monkeypatch.setattr(
+            semantic_review_cli,
+            "CpythonAnalyzer",
+            lambda: pytest.fail("v6 must not construct an analyzer"),
+        )
     monkeypatch.setattr(sys, "argv", args)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     assert main() == 3
@@ -53,6 +62,11 @@ def test_standalone_semantic_entrypoint_is_registered_and_model_optional(
         version,
         "not_requested",
     )
+    if version == 6:
+        assert result["policy_version"] == 4
+        assert [item["kind"] for item in result["investigation_coverage"]] == [
+            "behavior"
+        ]
     spend = ["--max-model-spend-usd-micros", "250000"]
     monkeypatch.setattr(sys, "argv", args + spend)
     with pytest.raises(SystemExit) as error:
@@ -66,6 +80,41 @@ def test_standalone_semantic_entrypoint_is_registered_and_model_optional(
     } and result["usage"]["model_calls"] == 0
 
 
+@pytest.mark.parametrize(
+    "valid", [True, False], ids=["empty-comparison", "missing-pin"]
+)
+def test_v6_standalone_exit_codes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    valid: bool,
+) -> None:
+    init(tmp_path)
+    (tmp_path / "file.txt").write_text("original\n")
+    commit(tmp_path)
+    head = revision(tmp_path, "HEAD")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "loop-reviewer-semantic",
+            "--repo",
+            str(tmp_path),
+            "--merge-base",
+            head,
+            "--head",
+            head if valid else "f" * 40,
+            "--report-version",
+            "6",
+        ],
+    )
+    assert main() == (0 if valid else 1)
+    report = json.loads(capsys.readouterr().out)
+    assert report["schema_version"] == 6
+    assert report["status"] == ("complete" if valid else "failed")
+    assert report["file_coverage"] == []
+
+
 class _SnapshotFixture(TypedDict):
     schema_version: int
     target: dict[str, object]
@@ -77,6 +126,7 @@ class _SnapshotFixture(TypedDict):
     conversation: list[dict[str, str]]
 
 
+@pytest.mark.parametrize("version", [4, 6], ids=["legacy-v4", "pinned-v6"])
 @pytest.mark.parametrize(
     "status",
     [
@@ -91,6 +141,7 @@ class _SnapshotFixture(TypedDict):
 )
 def test_local_snapshot_is_validated_before_review_and_text_stays_private(
     status: str,
+    version: int,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -152,7 +203,7 @@ def test_local_snapshot_is_validated_before_review_and_text_stays_private(
             "--head",
             head,
             "--report-version",
-            "4",
+            str(version),
             "--discussion-snapshot",
             str(snapshot),
         ],
@@ -162,7 +213,7 @@ def test_local_snapshot_is_validated_before_review_and_text_stays_private(
             main()
         assert error.value.code == 2 and not capsys.readouterr().out
         return
-    assert main() == (0 if status == "complete" else 3)
+    assert main() == (0 if version == 4 and status == "complete" else 3)
     output = capsys.readouterr().out
     assert "PRIVATE_CANARY" not in output
     report = json.loads(output)
@@ -170,7 +221,18 @@ def test_local_snapshot_is_validated_before_review_and_text_stays_private(
         report["schema_version"],
         report["policy_version"],
         report["discussion_status"],
-    ) == (4, 2, status)
-    assert report["stop_reason"] == "finished" and report["recommendation"] == "comment"
-    assert report["file_coverage"][0]["outcome"] == "complete"
-    assert report["findings"][0]["decision_reason"] == "reproduced_regression"
+    ) == (version, 2 if version == 4 else 4, status)
+    if version == 4:
+        assert (
+            report["stop_reason"] == "finished"
+            and report["recommendation"] == "comment"
+        )
+        assert report["file_coverage"][0]["outcome"] == "complete"
+        assert report["findings"][0]["decision_reason"] == "reproduced_regression"
+    else:
+        assert (
+            report["stop_reason"] == "budget_exhausted"
+            and report["recommendation"] == "none"
+        )
+        assert report["file_coverage"][0]["outcome"] == "unfinished"
+        assert report["findings"] == []

@@ -26,6 +26,12 @@ const report: InboxReport = {
 	later: [],
 };
 
+const requested = {
+	code: "direct_request",
+	label: "Review requested",
+} as const;
+const authored = { code: "authored", label: "You opened this PR" } as const;
+
 beforeEach(() => sessionStorage.setItem("loop-reviewer.capability", "test"));
 afterEach(() => {
 	cleanup();
@@ -90,7 +96,9 @@ test("launches a second row while the first request is pending", async () => {
 		},
 		author: "bob",
 		stale: false,
-		reasons: ["Your review was requested"],
+		reasons: [requested.label],
+		reasonDetails: [requested],
+		openedAt: null,
 		lastSaved: null,
 	}));
 	let acceptFirst!: (response: Response) => void;
@@ -149,7 +157,9 @@ test("Later and Restore submit the identity and settings version displayed with 
 		},
 		author: "bob",
 		stale: false,
-		reasons: ["Your review was requested"],
+		reasons: [requested.label],
+		reasonDetails: [requested],
+		openedAt: null,
 		lastSaved: null,
 	};
 	let current = { ...report, active: [row] };
@@ -201,7 +211,9 @@ test("searches across hosts and scopes both queues to the selected repository", 
 			url: `https://${repo.host}/${repo.repository}/pull/1`,
 			author: "sam",
 			stale: false,
-			reasons: ["Your PR"],
+			reasons: [authored.label],
+			reasonDetails: [authored],
+			openedAt: null,
 			lastSaved: null,
 		};
 	}
@@ -242,7 +254,71 @@ test("searches across hosts and scopes both queues to the selected repository", 
 		screen.getByRole("button", { name: "enterprise.example/org/service-1" }),
 	);
 	await user.click(
-		screen.getByRole("button", { name: "All repositories 2 active" }),
+		screen.getByRole("button", { name: "All repositories 0 later" }),
 	);
 	expect(screen.getByRole("tab", { name: "Active 2" })).toBeTruthy();
+});
+
+test.each([
+	["legacy timestamp", null],
+	["timestamp below the browser date range", -8_640_000_000_001],
+	["timestamp above the browser date range", 8_640_000_000_001],
+])("filters and sorts requests with a %s", async (_name, unavailable) => {
+	const now = Math.floor(Date.now() / 1000);
+	const rows = [
+		"Recent request",
+		"Other change",
+		"Older request",
+		"Legacy request",
+	].map((title, index) => ({
+		title,
+		author: "sam",
+		repository: "org/repo",
+		identity: {
+			host: "github.com",
+			repositoryId: "44",
+			account: "alice",
+			number: String(index + 1),
+		},
+		url: `https://github.com/org/repo/pull/${index + 1}`,
+		reasons: [index === 1 ? authored.label : requested.label],
+		reasonDetails: [index === 1 ? authored : requested],
+		openedAt: index === 3 ? unavailable : now - (index + 1) * 3600,
+		lastSaved: null,
+		stale: false,
+	}));
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () =>
+			Response.json({
+				...report,
+				active:
+					unavailable !== null && unavailable > now
+						? [rows[3], ...rows.slice(0, 3)]
+						: rows,
+				later: [rows[2]],
+			}),
+		),
+	);
+	mount();
+	const user = userEvent.setup();
+	await screen.findByText("1h ago");
+	expect(screen.getByText(/opening time unavailable/i)).toBeTruthy();
+	const titles = () =>
+		screen.getAllByRole("heading", { level: 3 }).map((el) => el.textContent);
+	expect(titles()).toEqual(rows.map((row) => row.title));
+	await user.click(screen.getByRole("button", { name: "Requested from me 3" }));
+	await user.click(
+		screen.getByRole("button", { name: "Sort by opening time: newest first" }),
+	);
+	expect(titles()).toEqual([
+		"Older request",
+		"Recent request",
+		"Legacy request",
+	]);
+	await user.click(screen.getByRole("tab", { name: "Later 1" }));
+	await user.click(screen.getByRole("button", { name: "All repositories" }));
+	expect(
+		screen.getByRole("button", { name: "github.com/org/repo 1 later" }),
+	).toBeTruthy();
 });

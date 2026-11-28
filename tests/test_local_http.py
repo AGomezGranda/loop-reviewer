@@ -54,7 +54,7 @@ from .support.browser_review import (
     FakeReader,
     fake_gh_environment,
 )
-from .support.hosted_report import offline_report
+from .support.hosted_report import offline_pinned_report, offline_report
 
 _ORIGIN = "http://127.0.0.1:43210"
 _HEADERS = {"Authorization": "Bearer test-capability", "Origin": _ORIGIN}
@@ -570,6 +570,7 @@ async def test_setup_applies_one_project_to_multiple_repositories(
                 "open",
                 False,
                 (),
+                1795780800 if number == 1 else None,
             )
             for number, key in enumerate(("ABC", "XYZ", "OTHER"), 1)
         )
@@ -583,6 +584,7 @@ async def test_setup_applies_one_project_to_multiple_repositories(
     empty = await client.get(url, headers=_HEADERS)
     assert empty.json() == {
         "settingsVersion": None,
+        "excludedTitleTerms": [],
         "jiraProjectKeys": [],
         "repositoryUrls": [],
         "configRevision": empty.json()["configRevision"],
@@ -598,6 +600,7 @@ async def test_setup_applies_one_project_to_multiple_repositories(
     settings = saved.json()
     assert settings == {
         "settingsVersion": "1",
+        "excludedTitleTerms": [],
         "jiraProjectKeys": ["ABC"],
         "repositoryUrls": urls,
         "configRevision": settings["configRevision"],
@@ -640,6 +643,10 @@ async def test_setup_applies_one_project_to_multiple_repositories(
     assert [(row["repository"], row["reasons"]) for row in report["active"]] == [
         (repo, ["Matches [ABC-…]"]) for repo in ("org/first", "org/second")
     ]
+    assert [row["openedAt"] for row in report["active"]] == [1795780800] * 2
+    assert [row["reasonDetails"] for row in report["active"]] == [
+        [{"code": "jira_project", "label": "Matches [ABC-…]"}]
+    ] * 2
 
     updated = await client.post(
         url,
@@ -648,6 +655,7 @@ async def test_setup_applies_one_project_to_multiple_repositories(
     )
     assert updated.json() == {
         "settingsVersion": "2",
+        "excludedTitleTerms": [],
         "jiraProjectKeys": ["XYZ"],
         "repositoryUrls": urls[1:],
         "configRevision": updated.json()["configRevision"],
@@ -668,8 +676,138 @@ async def test_setup_applies_one_project_to_multiple_repositories(
     assert accepted.json()["settingsVersion"] == "3"
     rescanned = await client.post("/api/v1/inbox/scan", headers=_HEADERS)
     (row,) = rescanned.json()["active"]
+    assert row["openedAt"] is None
+    invalid = await client.post(
+        url,
+        json={**accepted.json(), "excludedTitleTerms": ["release\nnotes"]},
+        headers=_HEADERS,
+    )
+    assert invalid.status_code == 422
+    assert "single line" in invalid.json()["message"]
+    filtered = await client.post(
+        url,
+        json={
+            **accepted.json(),
+            "excludedTitleTerms": ["unused", " chECK ", "CHECK", " "],
+        },
+        headers=_HEADERS,
+    )
+    assert filtered.json()["excludedTitleTerms"] == ["unused", "chECK"]
+    assert loads(path.read_text())["inbox"]["excluded_title_terms"] == [
+        "unused",
+        "chECK",
+    ]
+    annotated = (
+        '[\n    "unused", # Keep this rationale\n    " chECK ", "CHECK", " ",\n]'
+    )
+    path.write_text(path.read_text().replace('["unused", "chECK"]', annotated))
+    same_report = (await client.get("/api/v1/inbox", headers=_HEADERS)).json()
+    assert same_report["active"] == []
+    assert same_report["settingsVersion"] == filtered.json()["settingsVersion"]
+    same_settings = (await client.get(url, headers=_HEADERS)).json()
+    assert same_settings["excludedTitleTerms"] == filtered.json()["excludedTitleTerms"]
+    without_terms = {
+        key: value
+        for key, value in same_settings.items()
+        if key != "excludedTitleTerms"
+    }
+    resaved = await client.post(url, json=without_terms, headers=_HEADERS)
+    assert resaved.status_code == 200
+    assert annotated in path.read_text()
+    cleared = await client.post(
+        url, json={**resaved.json(), "excludedTitleTerms": []}, headers=_HEADERS
+    )
+    assert cleared.status_code == 200
+    assert (await client.get("/api/v1/inbox", headers=_HEADERS)).json()["active"] == [
+        row
+    ]
     assert row["title"] == "[OTHER-1] Check"
     assert row["identity"]["account"] == "carol"
+
+    deferred = await client.post(
+        "/api/v1/inbox/later",
+        json={
+            "url": row["url"],
+            "identity": row["identity"],
+            "settingsVersion": cleared.json()["settingsVersion"],
+        },
+        headers=_HEADERS,
+    )
+    assert deferred.status_code == 200
+    account = "alice"
+    hidden = await client.post(
+        url, json={**cleared.json(), "excludedTitleTerms": ["Check"]}, headers=_HEADERS
+    )
+    assert hidden.status_code == 200
+    assert (await client.get("/api/v1/inbox", headers=_HEADERS)).json()["later"] == []
+    for action in ("open", "later", "restore"):
+        rejected = await client.post(
+            f"/api/v1/inbox/{action}",
+            json={
+                "url": row["url"],
+                "identity": row["identity"],
+                "settingsVersion": hidden.json()["settingsVersion"],
+            },
+            headers=_HEADERS,
+        )
+        assert rejected.status_code == 409
+        assert rejected.json()["code"] == "inbox_changed"
+    shown = await client.post(
+        url, json={**hidden.json(), "excludedTitleTerms": []}, headers=_HEADERS
+    )
+    assert shown.status_code == 200
+    assert (await client.get("/api/v1/inbox", headers=_HEADERS)).json()["later"] == [
+        row
+    ]
+
+
+@pytest.mark.parametrize(
+    ("initial_terms", "repeated_terms"),
+    [([], []), (["Check"], [" Check ", "CHECK", " "])],
+    ids=["unchanged-empty", "unchanged-after-normalization"],
+)
+async def test_explicit_save_reverifies_unchanged_title_exclusions(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    initial_terms: list[str],
+    repeated_terms: list[str],
+) -> None:
+    account = "alice"
+
+    def verify(_self: object, address: RepositoryAddress) -> WatchedRepository:
+        return WatchedRepository(address, 42, account)
+
+    def discover(
+        _self: object, repo: WatchedRepository
+    ) -> tuple[DiscoveredPullRequest, ...]:
+        assert repo.account == account
+        return ()
+
+    monkeypatch.setattr(composition.GhRepositoryDiscovery, "verify", verify)
+    monkeypatch.setattr(composition.GhRepositoryDiscovery, "list_open", discover)
+    url = "/api/v1/inbox/configuration"
+    initial = (await client.get(url, headers=_HEADERS)).json()
+    saved = await client.post(
+        url,
+        json={
+            **initial,
+            "jiraProjectKeys": ["ABC"],
+            "repositoryUrls": ["https://github.com/org/repo"],
+            "excludedTitleTerms": initial_terms,
+        },
+        headers=_HEADERS,
+    )
+    assert saved.status_code == 200
+    account = "bob"
+    resaved = await client.post(
+        url,
+        json={**saved.json(), "excludedTitleTerms": repeated_terms},
+        headers=_HEADERS,
+    )
+    assert resaved.status_code == 200
+    scanned = await client.post("/api/v1/inbox/scan", headers=_HEADERS)
+    assert scanned.status_code == 200
+    assert scanned.json()["repositories"][0]["account"] == "bob"
 
 
 async def test_reconfigured_inbox_rejects_old_row_and_preserves_partial_results(
@@ -858,10 +996,12 @@ async def test_cli_and_http_edit_share_version_and_exact_publication(
     )
 
 
+@pytest.mark.parametrize("version", [5, 6], ids=["compiler-v5", "pinned-v6"])
 async def test_saved_report_survives_browser_edits_and_is_omitted_from_list(
-    client: httpx.AsyncClient, tmp_path: Path
+    client: httpx.AsyncClient, tmp_path: Path, version: int
 ) -> None:
-    report = offline_report("alpha.py", "beta.py")
+    fixture = offline_report if version == 5 else offline_pinned_report
+    report = fixture("alpha.py", "beta.py")
     pins = report.root.comparison
     selection = ReviewSelection(
         PullRequestRef("github.com", "org", "repo", 1, 42),
@@ -878,7 +1018,9 @@ async def test_saved_report_survives_browser_edits_and_is_omitted_from_list(
     saved = (await client.get(url, headers=_HEADERS)).json()
     original = report.model_dump(mode="json")
     assert saved["report"] == original
-    assert saved["feedback"]["findings"][0]["reportId"] == original["findings"][0]["id"]
+    assert [finding["reportId"] for finding in saved["feedback"]["findings"]] == [
+        finding["id"] for finding in original["findings"]
+    ]
     assert [row["new"]["path"] for row in saved["report"]["file_coverage"]] == [
         "alpha.py",
         "beta.py",
@@ -886,11 +1028,13 @@ async def test_saved_report_survives_browser_edits_and_is_omitted_from_list(
     edited = (
         await client.patch(
             url,
-            json={"kind": "drop_finding", "number": 1, "version": "1"},
+            json={"kind": "drop_finding", "number": 1, "version": "1"}
+            if version == 5
+            else {"kind": "edit_summary", "text": "Reviewed locally", "version": "1"},
             headers=_HEADERS,
         )
     ).json()
-    assert len(edited["feedback"]["findings"]) == 1
+    assert len(edited["feedback"]["findings"]) == (1 if version == 5 else 0)
     assert edited["report"] == original
     finished = await client.post(
         f"{url}/finish", json={"version": edited["version"]}, headers=_HEADERS

@@ -18,7 +18,7 @@ from loop_reviewer.review.model import (
 )
 from loop_reviewer.review.publication_model import PublicationPreview
 from loop_reviewer.review.pull_request import PullRequestRef
-from loop_reviewer.reviewer.full_review_contract import FullReviewResult
+from loop_reviewer.reviewer.hosted_report_contract import HostedReport
 
 
 def selection_lines(selection: ReviewSelection) -> list[str]:
@@ -133,7 +133,7 @@ def _findings_lines(review: SavedDraft | CompletedReview) -> list[str]:
     return ["No findings"]
 
 
-def _report_lines(saved: FullReviewResult | None) -> list[str]:
+def _report_lines(saved: HostedReport | None) -> list[str]:
     if saved is None:
         return []
     report = saved.root

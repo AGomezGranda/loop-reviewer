@@ -50,7 +50,7 @@ from loop_reviewer.review.store import (
     UnconfirmedPublication,
 )
 from loop_reviewer.reviewer.full_review_contract import FullReviewResult
-from tests.support.hosted_report import offline_report
+from tests.support.hosted_report import offline_pinned_report, offline_report
 from tests.test_local_checks import PINS
 
 _SELECTION = ReviewSelection(
@@ -154,8 +154,41 @@ def test_original_report_survives_edits_and_completion(
         ).fetchone() == (original,)
 
 
+def test_pinned_report_round_trips_through_draft_and_history(tmp_path: Path) -> None:
+    path = tmp_path / "state.db"
+    store = SqliteReviewRunStore(path)
+    report = offline_pinned_report("main.py", "settings.ts")
+    run = store.start(_report_selection(), replaces=None).finish(
+        GeneratedReview(project_report(report), None, None, report)
+    )
+    store.save(run)
+    reopened = SqliteReviewRunStore(path)
+    saved = reopened.get_draft(run.id)
+    assert saved is not None
+    assert saved.saved_draft().report == report
+    edited = EditReviewDraft(reopened).edit_summary(
+        run.draft_target, "Pinned text review"
+    )
+    reopened.complete(edited.complete_locally())
+    completion = reopened.completion(run.id)
+    assert completion is not None and completion.report == report
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT reviewer_report FROM review_runs"
+        ).fetchone() == (report.model_dump_json(),)
+
+
 @pytest.mark.parametrize(
-    "corruption", ["invalid-json", "unknown-version", "other-pins", "missing"]
+    "corruption",
+    [
+        "invalid-json",
+        "unknown-version",
+        "string-version",
+        "malformed-v5",
+        "malformed-v6",
+        "other-pins",
+        "missing",
+    ],
 )
 def test_saved_report_corruption_is_not_treated_as_legacy(
     tmp_path: Path, corruption: str
@@ -174,6 +207,13 @@ def test_saved_report_corruption_is_not_treated_as_legacy(
         payload = "not-json"
     elif corruption == "unknown-version":
         payload = json.dumps(data | {"schema_version": 99})
+    elif corruption == "string-version":
+        payload = json.dumps(data | {"schema_version": "5"})
+    elif corruption == "malformed-v5":
+        payload = json.dumps(data | {"policy_version": 4})
+    elif corruption == "malformed-v6":
+        compiler = offline_report("broken.py").model_dump(mode="json")
+        payload = json.dumps(compiler | {"schema_version": 6, "policy_version": 4})
     elif corruption == "other-pins":
         data["comparison"]["head"] = "e" * 40
         payload = FullReviewResult.model_validate(data).model_dump_json()
@@ -479,7 +519,7 @@ def test_upgrades_v1_drafts_without_changing_selection(tmp_path: Path) -> None:
         assert connection.execute("SELECT selection FROM review_runs").fetchone() == (
             original_json,
         )
-        assert connection.execute("PRAGMA user_version").fetchone() == (10,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (12,)
     finally:
         connection.close()
 
@@ -509,7 +549,7 @@ def test_upgrades_v8_with_unpriced_draft_and_completion(tmp_path: Path) -> None:
     assert completion.final_draft == ReviewDraft("approved", "legacy", ())
     assert _store(tmp_path).complete(completion) == completion
     with sqlite3.connect(_path(tmp_path)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (10,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (12,)
 
 
 def test_upgrades_v9_without_changing_legacy_feedback_or_pending_send(
@@ -527,6 +567,10 @@ def test_upgrades_v9_without_changing_legacy_feedback_or_pending_send(
             "SELECT preview FROM review_publications"
         ).fetchone()
         connection.execute("ALTER TABLE review_runs DROP COLUMN reviewer_report")
+        connection.execute(
+            "ALTER TABLE inbox_settings DROP COLUMN excluded_title_terms"
+        )
+        connection.execute("ALTER TABLE inbox_settings DROP COLUMN scan_version")
         connection.execute("PRAGMA user_version = 9")
 
     reopened = _store(tmp_path)
@@ -538,7 +582,7 @@ def test_upgrades_v9_without_changing_legacy_feedback_or_pending_send(
             connection.execute("SELECT preview FROM review_publications").fetchone()
             == original
         )
-        assert connection.execute("PRAGMA user_version").fetchone() == (10,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (12,)
     reopened.record_rejection(preview.id)
     assert reopened.complete(run.complete_locally()).final_draft == run.draft
 
@@ -608,7 +652,7 @@ def test_upgrade_from_v5_preserves_edited_drafts_and_local_history(
     assert reopened.completed(_SELECTION.identity) == legacy_completion
     assert reopened.complete(completion) == legacy_completion
     with sqlite3.connect(_path(tmp_path)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (10,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (12,)
         assert connection.execute(
             "SELECT github_review_id, publication_action FROM review_completions"
         ).fetchone() == (None, None)

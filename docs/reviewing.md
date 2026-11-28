@@ -36,7 +36,9 @@ Each successful edit prints the saved preview and increments its version. Findin
 
 The CLI’s edit inputs must be regular UTF-8 files of at most 64 KiB per field. It accepts LF and CRLF and saves LF. Keep the files private and delete them when no longer needed. `draft copy` writes Markdown to stdout, not to your clipboard; pipe or redirect it only to a destination you trust. Draft commands work offline without `gh` or model access.
 
-The original report stays private and unchanged as you edit. A partial report lists unfinished coverage; “No verified findings in the reviewed scope” is not a clean bill of health. A complete report means the required checks finished, not that the PR is safe or approved. Legacy drafts have no original report.
+New drafts use report v6: the reviewer inspects pinned text and independently verifies candidate findings against cited source, without running a compiler. With no model available or no spending allowance, eligible files remain unfinished and the report has no behavioral findings. Available discussion references can still appear privately. Older saved reports, including v5 compiler findings, remain unchanged when reopened.
+
+The original report stays private and unchanged as you edit. A partial report lists unfinished coverage; “No verified findings in the reviewed scope” is not a clean bill of health. A complete report means the required checks finished, not that the PR is safe or approved. Drafts saved before original reports were introduced have no original report.
 
 ## Finish privately or publish
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from math import ceil
 from typing import Literal
 
-from loop_reviewer.inbox.model import InboxReport, InboxRow
+from loop_reviewer.inbox.model import InboxReason, InboxReport, InboxRow
 from loop_reviewer.review.model import ReviewIdentity, RunStatus
 
 POLL_INTERVAL_SECONDS = 120
@@ -26,7 +26,7 @@ class WatchCycle:
     changed: tuple[InboxRow, ...]
 
 
-type _VisibleFields = tuple[str, str, str, tuple[str, ...], RunStatus | None]
+type _VisibleFields = tuple[str, str, str, tuple[InboxReason, ...], RunStatus | None]
 
 
 def _visible_fields(row: InboxRow) -> _VisibleFields:

@@ -150,6 +150,78 @@ def test_v5_retains_regular_text_as_unfinished_without_a_model(amount: int) -> N
     ]
 
 
+@pytest.mark.parametrize("amount", [0, 100], ids=["zero-spend", "no-provider"])
+def test_v6_does_not_prepare_source_or_calls_without_allowance_and_model(
+    amount: int,
+) -> None:
+    from loop_reviewer.reviewer.full_review_v6 import FullReviewRequestV6
+    from loop_reviewer.reviewer.semantic_review import review_full_v6
+
+    class InventoryOnly(Source):
+        @override
+        def read_text_blob(self, *args: object, **kwargs: object) -> PinnedTextBlob:
+            pytest.fail("inventory-only review must not read blobs")
+
+        @override
+        def hunks(self, *args: object, **kwargs: object) -> ReadFailure:
+            pytest.fail("inventory-only review must not read hunks")
+
+        @override
+        def search(self, *args: object, **kwargs: object) -> SearchPaths:
+            pytest.fail("inventory-only review must not search")
+
+    class ForbiddenModel(ScriptedModel):
+        @override
+        def quote(self, call: ModelCall) -> CallQuote:
+            pytest.fail("zero spend must not quote")
+
+    original = row("link")
+    assert original.new is not None
+    link = ChangedFile.model_validate(
+        original.model_dump()
+        | {
+            "change_type": "type_changed",
+            "new": original.new.model_dump() | {"mode": "120000"},
+        }
+    )
+    source = InventoryOnly(
+        (row("main.py"), row("asset", binary=True), link, row("README"))
+    )
+    report = review_full_v6(
+        FullReviewRequestV6(
+            schema_version=6,
+            scope="full_review",
+            comparison=PINS,
+            budget=InventoryBudget(max_model_spend_usd_micros=amount),
+        ),
+        source.open,
+        ForbiddenModel() if not amount else None,
+        lambda: 0,
+    ).root
+    reason = "unsupported_model" if amount else "budget_exhausted"
+    assert (report.schema_version, report.policy_version, report.status) == (
+        6,
+        4,
+        "partial",
+    )
+    assert report.stop_reason == ("finished" if amount else reason)
+    assert [r.reason for r in report.file_coverage] == [
+        reason,
+        "binary",
+        "unsupported_language",
+        reason,
+    ]
+    assert {r.highest_completed_check for r in report.file_coverage} == {
+        "inventory_only"
+    }
+    assert [entry.kind for entry in report.investigation_coverage] == [
+        "behavior",
+        "behavior",
+    ]
+    assert report.usage.model_calls == 0
+    assert report.findings == report.evidence_index == ()
+
+
 def test_v5_skips_compiler_work_for_nonregular_type_changes() -> None:
     class RegularSource(Source):
         @override
