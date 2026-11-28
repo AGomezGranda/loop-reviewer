@@ -21,11 +21,13 @@ export function InboxScreen({
 	reviewsLink,
 	setupLink,
 	disconnected,
+	completionSummary,
 }: {
 	onAccepted: () => string;
 	reviewsLink: ReactNode;
 	setupLink: ReactNode;
 	disconnected?: boolean;
+	completionSummary?: ReactNode;
 }) {
 	const cache = useQueryClient();
 	const inbox = useQuery(inboxQuery);
@@ -68,7 +70,12 @@ export function InboxScreen({
 	return (
 		<div className="space-y-4">
 			<div className="flex flex-wrap items-center justify-between gap-3">
-				<h1 className="text-2xl font-semibold tracking-tight">Review inbox</h1>
+				<div className="space-y-1">
+					<h1 className="text-2xl font-semibold tracking-tight">
+						Review inbox
+					</h1>
+					{completionSummary && <div>{completionSummary}</div>}
+				</div>
 				<div className="flex flex-wrap items-center gap-3">
 					{report?.kind === "report" && setupLink}
 					<Button

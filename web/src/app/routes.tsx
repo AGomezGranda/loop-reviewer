@@ -25,7 +25,7 @@ import { draftKey, draftQuery } from "@/features/review/review-queries";
 import { reviewsQuery } from "@/features/reviews/reviews-queries";
 import { ReviewsScreen } from "@/features/reviews/reviews-screen";
 import { SetupScreen } from "@/features/setup/setup-screen";
-import { statsKey } from "@/features/stats/stats-queries";
+import { statsKey, statsQuery } from "@/features/stats/stats-queries";
 import { useReviewLaunch, useRouteNavigation } from "./review-navigation";
 import { ReviewsLink, WorkspaceLayout } from "./workspace-layout";
 
@@ -54,11 +54,24 @@ function StatsRoute() {
 
 function InboxRoute() {
 	const status = useOutletContext<string>();
+	const stats = useQuery(statsQuery());
+	const completed = stats.isSuccess ? stats.data.completedLast7Days : undefined;
 	return (
 		<InboxScreen
 			onAccepted={useReviewLaunch()}
 			reviewsLink={<ReviewsLink />}
 			disconnected={status === "disconnected"}
+			completionSummary={
+				completed !== undefined && (
+					<Link
+						className="rounded-sm text-xs text-muted-foreground underline underline-offset-4 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+						to="/stats"
+					>
+						{completed} {completed === 1 ? "review" : "reviews"} completed in
+						the last 7 days
+					</Link>
+				)
+			}
 			setupLink={
 				<Link className={linkStyle} to="/setup">
 					Manage repositories

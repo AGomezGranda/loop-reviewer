@@ -344,6 +344,19 @@ test("browser launches overlap, survive reload, and leave finished reviews in Hi
 		await expect(row(pr)).toHaveCount(0);
 		await expect(row(second).getByText("Running")).toBeVisible();
 		await tab("Inbox").click();
+		await page
+			.getByRole("link", { name: "1 review completed in the last 7 days" })
+			.click();
+		await expect(page).toHaveURL(/\/stats$/);
+		await page.reload();
+		const totals = page.getByRole("region", { name: "Totals" });
+		await expect(
+			totals
+				.getByText("Completed locally", { exact: true })
+				.locator("..")
+				.getByRole("definition"),
+		).toHaveText("1");
+		await tab("Inbox").click();
 		release(18);
 		await expect
 			.poll(async () => {

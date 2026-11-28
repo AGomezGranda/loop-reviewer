@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { InboxReport } from "./inbox-queries";
 import { InboxScreen } from "./inbox-screen";
@@ -39,7 +40,7 @@ afterEach(() => {
 	sessionStorage.clear();
 });
 
-function mount() {
+function mount(completionSummary?: ReactNode) {
 	render(
 		<QueryClientProvider
 			client={
@@ -50,6 +51,7 @@ function mount() {
 				onAccepted={() => "Review submitted."}
 				reviewsLink={<a href="/reviews">View Reviews</a>}
 				setupLink={<a href="/setup">Setup</a>}
+				completionSummary={completionSummary}
 			/>
 		</QueryClientProvider>,
 	);
@@ -81,6 +83,40 @@ test.each([
 	);
 	mount();
 	await screen.findByText(message);
+});
+
+test.each([
+	["configured", report, "No pull requests are waiting for review."],
+	["unconfigured", { kind: "unconfigured" }, "Inbox setup needed"],
+])(
+	"renders the %s Inbox without an optional summary",
+	async (_state, data, message) => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Response.json(data)),
+		);
+		mount();
+		await screen.findByText(message);
+		expect(screen.getByRole("button", { name: "Scan now" })).toBeTruthy();
+		expect(
+			screen.queryByRole("link", { name: /reviews completed/ }),
+		).toBeNull();
+	},
+);
+
+test("renders the supplied completion summary with the Inbox controls", async () => {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async () => Response.json(report)),
+	);
+	mount(<a href="/stats">4 reviews completed in the last 7 days</a>);
+	await screen.findByText("No pull requests are waiting for review.");
+	expect(
+		screen
+			.getByRole("link", { name: "4 reviews completed in the last 7 days" })
+			.getAttribute("href"),
+	).toBe("/stats");
+	expect(screen.getByRole("button", { name: "Scan now" })).toBeTruthy();
 });
 
 test("launches a second row while the first request is pending", async () => {
