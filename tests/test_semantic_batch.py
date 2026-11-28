@@ -4,10 +4,16 @@ from typing import override
 
 import pytest
 
+from loop_reviewer.reviewer.change_coverage import (
+    ChangedLineExcerpt,
+    PreparedCoverage,
+    required_ranges,
+)
 from loop_reviewer.reviewer.integrations.git_hunks import decode_hunks
 from loop_reviewer.reviewer.integrations.python_analyzer import CpythonAnalyzer
 from loop_reviewer.reviewer.inventory import RevisionSide
 from loop_reviewer.reviewer.inventory_contract import ChangedFile
+from loop_reviewer.reviewer.local_check_contract import SourceEvidence, SourceLocation
 from loop_reviewer.reviewer.local_evidence import EvidenceIndex, LocalEvidenceWork
 from loop_reviewer.reviewer.model_budget import SpendLedger
 from loop_reviewer.reviewer.model_contract import (
@@ -24,8 +30,14 @@ from loop_reviewer.reviewer.pinned_source import (
     ReadFailure,
     SearchPaths,
 )
-from loop_reviewer.reviewer.semantic_batch import run_semantic_batch
-from loop_reviewer.reviewer.semantic_inputs import build_targeted_bundle
+from loop_reviewer.reviewer.semantic_batch import (
+    run_coverage_batches,
+    run_semantic_batch,
+)
+from loop_reviewer.reviewer.semantic_inputs import (
+    build_targeted_bundle,
+    canonical_inventory,
+)
 from loop_reviewer.reviewer.semantic_limits import SemanticLimits
 from tests.test_local_checks import PINS, Source, row
 
@@ -336,3 +348,170 @@ def test_batch_deduplicates_only_proven_equivalence(distinct: bool) -> None:
     assert [decision.reason for decision in result.discards] == (
         [] if distinct else ["duplicate"]
     )
+
+
+class CoverageModel(ScriptedModel):
+    def __init__(self, *, omit_first: bool = False) -> None:
+        super().__init__()
+        self.omit_first = omit_first
+
+    @override
+    def send(
+        self, call: ModelCall, quote: CallQuote, *, timeout_seconds: float
+    ) -> ModelAttempt:
+        self.calls.append(call)
+        payload = json.loads(call.prompt.split("\n\n", 1)[1])
+        raw = json.dumps(
+            {
+                "schema_version": 1,
+                "investigation_id": call.unit_id,
+                "kind": "submit_candidates",
+                "reviewed_file_ids": []
+                if self.omit_first and len(self.calls) == 1
+                else payload["selected_file_ids"],
+                "candidates": [],
+            }
+        )
+        return ModelAttempt(
+            "success", TokenUsage(100, 10, 110), parse_reply(call, raw), len(raw)
+        )
+
+    def shown_lines(self) -> list[list[tuple[str, int]]]:
+        return [
+            [
+                (item["file_id"], item["range"]["start_line"])
+                for item in json.loads(call.prompt.split("\n\n", 1)[1])[
+                    "changed_excerpts"
+                ]
+            ]
+            for call in self.calls
+        ]
+
+
+def _prepared_changes(*patches: bytes, widths: tuple[int, ...]) -> PreparedCoverage:
+    inventory = canonical_inventory(
+        tuple(row(f"file-{n}.go", added=True) for n in range(len(patches)))
+    )
+    required = tuple(
+        item
+        for file, patch in zip(inventory, patches, strict=True)
+        for item in required_ranges(file, PINS, decode_hunks(patch))
+    )
+    changed = tuple(
+        ChangedLineExcerpt(
+            item.file_id,
+            SourceEvidence(
+                kind="source",
+                id=f"e{n:05d}",
+                role="check_location",
+                range=SourceLocation.from_range(item.source),
+                text="x" * width + "\n",
+            ),
+        )
+        for n, (item, width) in enumerate(
+            zip(
+                (line for span in required for line in span.lines()),
+                widths,
+                strict=True,
+            ),
+            1,
+        )
+    )
+    return PreparedCoverage(PINS, inventory, required, changed)
+
+
+def test_fifth_separated_hunk_is_sent_in_a_later_packet() -> None:
+    prepared = _prepared_changes(
+        b"".join(f"@@ -0,0 +{line} @@\n+x\n".encode() for line in (1, 10, 20, 30, 40)),
+        widths=(10,) * 5,
+    )
+    model = CoverageModel()
+    result = run_coverage_batches(
+        prepared,
+        model,
+        SpendLedger(1000, lambda: 0, multiple_investigations=True),
+        SemanticLimits(120),
+        lambda: 0,
+        packet_bytes=1600,
+    )
+    assert model.shown_lines() == [
+        [("p00001", line) for line in (1, 10, 20, 30)],
+        [("p00001", 40)],
+    ]
+    assert result.reviewed_ids == ("p00001",)
+    assert not result.gaps and result.stop is None
+    assert result.offered == result.acknowledged
+
+
+@pytest.mark.parametrize(
+    "omit_first", [False, True], ids=["all-acknowledged", "first-slice-unacknowledged"]
+)
+def test_one_contiguous_hunk_can_span_multiple_packets(omit_first: bool) -> None:
+    # An added line can be sent alone, but the two additions cannot fit together.
+    prepared = _prepared_changes(b"@@ -0,0 +1,2 @@\n+x\n+x\n", widths=(300, 300))
+    model = CoverageModel(omit_first=omit_first)
+    result = run_coverage_batches(
+        prepared,
+        model,
+        SpendLedger(1000, lambda: 0, multiple_investigations=True),
+        SemanticLimits(120),
+        lambda: 0,
+        packet_bytes=1150,
+    )
+    assert model.shown_lines() == [[("p00001", 1)], [("p00001", 2)]]
+    assert result.reviewed_ids == (() if omit_first else ("p00001",))
+    assert result.gaps == ({"p00001": "not_scheduled"} if omit_first else {})
+    assert result.stop is None
+    assert {item.source.start_line for item in result.acknowledged} == (
+        {2} if omit_first else {1, 2}
+    )
+
+
+@pytest.mark.parametrize("first", ["oversized", "unacknowledged", "budget", "no-edits"])
+def test_unfinished_work_does_not_erase_prior_acknowledgments(first: str) -> None:
+    prepared = _prepared_changes(
+        b"" if first == "no-edits" else b"@@ -0,0 +1 @@\n+x\n",
+        b"@@ -0,0 +1 @@\n+y\n",
+        widths={"oversized": (1200, 300), "no-edits": (300,)}.get(first, (300, 300)),
+    )
+    model = CoverageModel(omit_first=first == "unacknowledged")
+    ledger = SpendLedger(
+        27 if first == "budget" else 1000, lambda: 0, multiple_investigations=True
+    )
+    result = run_coverage_batches(
+        prepared, model, ledger, SemanticLimits(120), lambda: 0, packet_bytes=1150
+    )
+    wanted = {
+        "oversized": (
+            [[("p00002", 1)]],
+            "p00002",
+            "p00001",
+            "work_limit",
+            "work_limit",
+        ),
+        "unacknowledged": (
+            [[("p00001", 1)], [("p00002", 1)]],
+            "p00002",
+            "p00001",
+            "not_scheduled",
+            None,
+        ),
+        "budget": (
+            [[("p00001", 1)]],
+            "p00001",
+            "p00002",
+            "budget_exhausted",
+            "budget_exhausted",
+        ),
+        "no-edits": ([[("p00002", 1)]], "p00002", "p00001", "missing_evidence", None),
+    }
+    shown, reviewed, incomplete, gap, stop = wanted[first]
+    assert model.shown_lines() == shown
+    assert result.reviewed_ids == (reviewed,)
+    assert result.gaps == {incomplete: gap}
+    assert result.stop == stop
+    assert ledger.snapshot().model_calls == len(shown)
+    assert {item.file_id for item in result.acknowledged} == {reviewed}
+    assert {item.file_id for item in result.offered} == {
+        file_id for packet in shown for file_id, _ in packet
+    }

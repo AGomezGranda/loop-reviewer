@@ -115,6 +115,13 @@ def _inventory(rows: tuple[ChangedFile, ...]) -> tuple[BundleFile, ...]:
     )
 
 
+def canonical_inventory(rows: tuple[ChangedFile, ...]) -> tuple[BundleFile, ...]:
+    return tuple(
+        BundleFile(f"p{n:05d}", file.change)
+        for n, file in enumerate(_inventory(rows), 1)
+    )
+
+
 def _location(location: SourceLocation) -> SourceRange:
     return SourceRange(
         location.side,
@@ -414,11 +421,7 @@ def build_targeted_bundle(
     skip_ids: frozenset[str] = frozenset(),
 ) -> EvidenceBundle:
     limit = min(max_bytes, MAX_EVIDENCE_BYTES)
-    # Assign IDs in canonical order even when the caller has not already sorted inventory.
-    inventory = tuple(
-        BundleFile(f"p{n:05d}", file.change)
-        for n, file in enumerate(_inventory(rows), 1)
-    )
+    inventory = canonical_inventory(rows)
     omissions: dict[str, Omission] = {}
     targets: list[_Target] = []
     # Cheap metadata schedules reads only; final selection uses the evidence rank below.
