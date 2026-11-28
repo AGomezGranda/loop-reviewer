@@ -25,6 +25,7 @@ import { draftKey, draftQuery } from "@/features/review/review-queries";
 import { reviewsQuery } from "@/features/reviews/reviews-queries";
 import { ReviewsScreen } from "@/features/reviews/reviews-screen";
 import { SetupScreen } from "@/features/setup/setup-screen";
+import { statsKey } from "@/features/stats/stats-queries";
 import { useReviewLaunch, useRouteNavigation } from "./review-navigation";
 import { ReviewsLink, WorkspaceLayout } from "./workspace-layout";
 
@@ -36,6 +37,20 @@ const DraftScreen = lazy(() =>
 		default: DraftScreen,
 	})),
 );
+
+const StatsScreen = lazy(() =>
+	import("@/features/stats/stats-screen").then(({ StatsScreen }) => ({
+		default: StatsScreen,
+	})),
+);
+
+function StatsRoute() {
+	return (
+		<Suspense fallback={<p role="status">Loading stats…</p>}>
+			<StatsScreen />
+		</Suspense>
+	);
+}
 
 function InboxRoute() {
 	const status = useOutletContext<string>();
@@ -115,6 +130,7 @@ function DraftRoute() {
 				onChanged={() => {
 					void cache.invalidateQueries({ queryKey: inboxQuery.queryKey });
 					void cache.invalidateQueries({ queryKey: historyKey });
+					void cache.invalidateQueries({ queryKey: statsKey });
 					void cache.invalidateQueries({ queryKey: reviewsQuery.queryKey });
 				}}
 				historyLink={(id) => (
@@ -193,6 +209,7 @@ function PublicationRoute() {
 			onChanged={() => {
 				void cache.invalidateQueries({ queryKey: draftKey });
 				void cache.invalidateQueries({ queryKey: historyKey });
+				void cache.invalidateQueries({ queryKey: statsKey });
 				void cache.invalidateQueries({ queryKey: inboxQuery.queryKey });
 				void cache.invalidateQueries({ queryKey: reviewsQuery.queryKey });
 			}}
@@ -218,6 +235,7 @@ export function createWorkspaceRouter() {
 				{ path: "setup", Component: SetupRoute },
 				{ path: "drafts/:runId", Component: DraftRoute },
 				{ path: "history", Component: HistoryRoute },
+				{ path: "stats", Component: StatsRoute },
 				{ path: "publications/:publicationId", Component: PublicationRoute },
 				{ path: "history/:runId", Component: CompletionRoute },
 				{

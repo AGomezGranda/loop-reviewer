@@ -121,6 +121,7 @@ def create_app(
             "/reviews",
             "/setup",
             "/history",
+            "/stats",
             "/history/{runId}",
             "/drafts/{runId}",
             "/publications/{id}",

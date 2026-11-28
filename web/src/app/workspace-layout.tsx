@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
 	Archive,
+	ChartNoAxesColumn,
 	GitPullRequest,
 	Inbox,
 	ListChecks,
@@ -17,6 +18,7 @@ const navigation = [
 	{ path: "/inbox", text: "Inbox", Icon: Inbox },
 	{ path: "/reviews", text: "Reviews", Icon: ListChecks },
 	{ path: "/history", text: "History", Icon: Archive },
+	{ path: "/stats", text: "Stats", Icon: ChartNoAxesColumn },
 	{ path: "/setup", text: "Setup", Icon: Settings },
 ];
 
@@ -47,14 +49,14 @@ export function WorkspaceLayout() {
 				</div>
 				<nav
 					aria-label="Workspace"
-					className="grid grid-cols-4 gap-1 md:grid-cols-1"
+					className="grid grid-cols-5 gap-1 md:grid-cols-1"
 				>
 					{navigation.map(({ path, text, Icon }) => (
 						<NavLink
 							key={path}
 							to={path}
 							className={({ isActive }) =>
-								`flex flex-col items-center justify-center gap-1 rounded-md px-2 py-2 text-sm focus-visible:ring-2 focus-visible:ring-ring sm:flex-row sm:gap-2 md:justify-start ${isActive ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-muted"}`
+								`flex flex-col items-center justify-center gap-1 rounded-md px-1 py-2 text-sm focus-visible:ring-2 focus-visible:ring-ring sm:flex-row sm:gap-2 md:justify-start md:px-2 ${isActive ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-muted"}`
 							}
 						>
 							<Icon className="size-4" aria-hidden="true" />
