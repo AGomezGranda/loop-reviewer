@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 
+from loop_reviewer.reviewer.ai_reviewer import review_evidence
 from loop_reviewer.reviewer.discussion_policy import map_discussion
 from loop_reviewer.reviewer.discussion_report import (
     DiscussionDetails,
@@ -25,6 +26,7 @@ from loop_reviewer.reviewer.inventory import InventorySourceError, validated_inv
 from loop_reviewer.reviewer.inventory_contract import PinnedComparison
 from loop_reviewer.reviewer.local_checks import run_local_checks
 from loop_reviewer.reviewer.local_evidence import LocalEvidenceWork, PinnedEvidenceWork
+from loop_reviewer.reviewer.local_reviewer import LocalReviewEvidence
 from loop_reviewer.reviewer.model_budget import SpendLedger
 from loop_reviewer.reviewer.model_contract import ReviewModel
 from loop_reviewer.reviewer.pinned_source import PinnedSource
@@ -32,7 +34,6 @@ from loop_reviewer.reviewer.python_context import PythonAnalyzer
 from loop_reviewer.reviewer.semantic_batch import (
     BatchOutcome,
     run_full_batches,
-    run_pinned_batches,
     run_semantic_batch,
 )
 from loop_reviewer.reviewer.semantic_contract import (
@@ -151,7 +152,14 @@ def review_full_v6(
                     ledger.deadline,
                     retrieval_capacity=limits.retrieval_capacity,
                 )
-                batch = run_pinned_batches(rows, work, model, ledger, limits)
+                local = LocalReviewEvidence.prepare(rows, work)
+                batch = review_evidence(
+                    local,
+                    model,
+                    ledger,
+                    limits,
+                    monotonic,
+                )
             else:
                 reason: BehaviorGap = (
                     "unsupported_model" if amount else "budget_exhausted"

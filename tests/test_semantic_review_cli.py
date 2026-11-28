@@ -51,7 +51,7 @@ def test_standalone_semantic_entrypoint_is_registered_and_model_optional(
             lambda: pytest.fail("v6 must not construct an analyzer"),
         )
     monkeypatch.setattr(sys, "argv", args)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LOOP_REVIEWER_PI_MODEL", raising=False)
     assert main() == 3
     result = json.loads(capsys.readouterr().out)
     assert (
@@ -74,7 +74,12 @@ def test_standalone_semantic_entrypoint_is_registered_and_model_optional(
     assert error.value.code == 2 and not capsys.readouterr().out
     monkeypatch.setattr(sys, "argv", args + spend + ["--allow-provider"])
     assert main() == 3
-    result = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    if version in (5, 6):
+        assert "AI analysis unavailable: Set LOOP_REVIEWER_PI_MODEL" in captured.err
+    else:
+        assert not captured.err
     assert {row["reason"] for row in result["file_coverage"]} == {
         "unsupported_model"
     } and result["usage"]["model_calls"] == 0

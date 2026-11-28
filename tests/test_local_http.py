@@ -386,7 +386,9 @@ async def test_active_list_reports_background_outcomes(
         )
 
 
-@pytest.mark.parametrize("changed", ["comparison", "replacement", "same"])
+@pytest.mark.parametrize(
+    "changed", ["comparison", "replacement", "same", "partial-draft"]
+)
 async def test_background_retry_rechecks_the_saved_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
 ) -> None:
@@ -394,8 +396,24 @@ async def test_background_retry_rechecks_the_saved_attempt(
     workflows = Workflows(state, {}, config_path=tmp_path / "config.toml")
     app = _app(workflows, workflows.inbox_watch(monotonic=lambda: 0))
     store = SqliteReviewRunStore(state / "reviews.sqlite3")
-    original = store.start(_SAVED_SELECTION, replaces=None)
-    store.save(original.fail("Original failure", "failed"))
+    selection = _SAVED_SELECTION
+    report = offline_pinned_report("review.ts") if changed == "partial-draft" else None
+    if report is not None:
+        pins = report.root.comparison
+        selection = replace(
+            selection,
+            revision=replace(
+                selection.revision, merge_base=pins.merge_base, head=pins.head
+            ),
+        )
+    original = store.start(selection, replaces=None)
+    if report is None:
+        store.save(original.fail("Original failure", "failed"))
+    else:
+        original = original.finish(
+            GeneratedReview(project_report(report), None, None, report)
+        )
+        store.save(original)
     entered, release = Event(), Event()
 
     class Reader(FakeReader):
@@ -405,14 +423,13 @@ async def test_background_retry_rechecks_the_saved_attempt(
             assert release.wait(5)
             account, pr = super().read_pull_request(ref)
             return account, replace(
-                pr, head="d" * 40
-            ) if changed == "comparison" else pr
+                pr,
+                head="d" * 40 if changed == "comparison" else selection.revision.head,
+            )
 
         @override
         def read_revision(self, _pull_request: PullRequest) -> ReviewedRevision:
-            return replace(
-                super().read_revision(_pull_request), head=_pull_request.head
-            )
+            return replace(selection.revision, head=_pull_request.head)
 
     monkeypatch.setattr(composition, "open_gh_environment", fake_gh_environment)
     monkeypatch.setattr(composition, "GhPullRequestReader", Reader)
@@ -424,6 +441,10 @@ async def test_background_retry_rechecks_the_saved_attempt(
         retry_url = f"/api/v1/reviews/{original.id}/retry"
         async with app.router.lifespan_context(app):
             try:
+                (current,) = (
+                    await client.get("/api/v1/reviews", headers=_HEADERS)
+                ).json()
+                assert current["retryAction"] == ("rerun" if report else "retry")
                 accepted = await client.post(retry_url, headers=_HEADERS)
                 assert accepted.status_code == 202
                 assert await asyncio.to_thread(entered.wait, 2)
@@ -433,6 +454,7 @@ async def test_background_retry_rechecks_the_saved_attempt(
                     await client.get("/api/v1/reviews", headers=_HEADERS)
                 ).json()
                 assert pending["status"] == "running"
+                assert pending["retryAction"] is None
                 if changed == "replacement":
                     replacement = store.start(
                         _SAVED_SELECTION, replaces=original.id
@@ -442,9 +464,28 @@ async def test_background_retry_rechecks_the_saved_attempt(
             finally:
                 release.set()
         rows = (await client.get("/api/v1/reviews", headers=_HEADERS)).json()
-        if changed == "same":
-            (saved,) = rows
+        if changed in ("same", "partial-draft"):
+            saved, *previous = rows
             assert saved["runId"] != str(original.id)
+            assert saved["retryAction"] is None
+            rejected = await client.post(
+                f"/api/v1/reviews/{saved['runId']}/retry", headers=_HEADERS
+            )
+            assert rejected.status_code == 409
+            if report is not None:
+                (archived,) = previous
+                assert archived["runId"] == str(original.id)
+                assert archived["previousDraft"] is True
+                assert archived["retryAction"] is None
+                assert (
+                    await client.post(retry_url, headers=_HEADERS)
+                ).status_code == 409
+                old = await client.get(
+                    f"/api/v1/drafts/{original.id}", headers=_HEADERS
+                )
+                assert old.json()["report"] == report.model_dump(mode="json")
+            else:
+                assert not previous
         else:
             failure, saved = rows
             assert failure["kind"] == "launch"

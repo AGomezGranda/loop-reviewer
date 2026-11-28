@@ -32,6 +32,7 @@ from loop_reviewer.local_http.app import create_app
 from loop_reviewer.local_http.serve import serve
 from loop_reviewer.review.drafts import DraftNotFound
 from loop_reviewer.review.feedback import feedback_markdown
+from loop_reviewer.review.generate import ReviewerError
 from loop_reviewer.review.model import (
     MAX_EDIT_BYTES,
     MAX_STORED_INTEGER,
@@ -73,10 +74,14 @@ def main() -> int:
     review_command.add_argument(
         "--retry",
         action="store_true",
-        help="Replace a failed or abandoned attempt for the same selection",
+        help="Retry a failed or interrupted attempt, or rerun partial draft analysis",
     )
     review_command.add_argument(
         "pr_url", metavar="PR_URL", help="URL of a readable pull request"
+    )
+    model_check = commands.add_parser(
+        "check-review-model",
+        help="Check AI review configuration without sending PR source",
     )
     draft_commands = _add_draft_commands(
         commands.add_parser("draft", help="Work with a saved draft by local run ID")
@@ -102,6 +107,12 @@ def main() -> int:
         return 0
     if args.command == "ui":
         return _run_ui()
+    if args.command == "check-review-model":
+        try:
+            print(Workflows.check_review_model(os.environ.copy()))
+        except ReviewerError as error:
+            model_check.exit(1, f"{model_check.prog}: error: {error}\n")
+        return 0
     if args.command == "draft":
         return _run_draft(draft_commands[args.draft_command], args)
     if args.command == "publish":

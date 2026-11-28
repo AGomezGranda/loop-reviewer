@@ -10,6 +10,8 @@ import pytest
 
 from loop_reviewer.cli.output import render_draft
 from loop_reviewer.integrations.local_state.sqlite_reviews import SqliteReviewRunStore
+from loop_reviewer.review.active import ActiveReviews
+from loop_reviewer.review.drafts import EditReviewDraft
 from loop_reviewer.review.generate import (
     DraftReview,
     FailedReview,
@@ -22,6 +24,7 @@ from loop_reviewer.review.generate import (
 from loop_reviewer.review.hosted_report import project_report
 from loop_reviewer.review.model import (
     CompletedReview,
+    DraftTarget,
     Finding,
     GeneratedReview,
     ReviewAlreadyCompleted,
@@ -98,6 +101,17 @@ class MemoryStore:
     def latest(self, key: ReviewKey) -> ReviewRun | None:
         run_id = self.current.get(key)
         return None if run_id is None else self.runs[run_id]
+
+    def latest_draft(self, key: ReviewKey) -> ReviewRun | None:
+        return max(
+            (
+                run
+                for run in self.runs.values()
+                if run.selection.key == key and run.status == "draft_ready"
+            ),
+            key=lambda run: run.id,
+            default=None,
+        )
 
     def start(self, selection: ReviewSelection, *, replaces: int | None) -> ReviewRun:
         if self.before_start is not None:
@@ -364,6 +378,34 @@ def test_partial_report_reopens_without_reviewer(tmp_path: Path) -> None:
     assert isinstance(resumed, DraftReview) and resumed.status == "resumed"
     assert resumed.run == generated.run
     assert execution.calls == reviewer.calls == 1
+
+    store = SqliteReviewRunStore(state)
+    previous = EditReviewDraft(store).edit_summary(
+        DraftTarget(generated.run.id, 1), "My edits"
+    )
+    rerun = ReviewPullRequest(reader, store, execution).run(selection.ref, retry=True)
+    assert isinstance(rerun, DraftReview) and rerun.status == "generated"
+    assert rerun.run.id != previous.id and rerun.run.selection == previous.selection
+    assert execution.calls == reviewer.calls == 2
+    assert store.get_draft(previous.id) == previous
+    assert store.latest(selection.key) == store.get_draft(rerun.run.id)
+    current, archived = ActiveReviews(store, lambda _: False).list()
+    assert current.retry_action == "rerun" and not current.run.previous_draft
+    assert archived.run.previous_draft and archived.retry_action is None
+
+    failing = StubExecution(
+        StubReviewer(error=ReviewerError("Pi is not configured.", "setup"))
+    )
+    app = ReviewPullRequest(reader, store, failing)
+    assert isinstance(app.run(selection.ref, retry=True), FailedReview)
+    reopened = app.run(selection.ref)
+    assert isinstance(reopened, DraftReview) and reopened.status == "resumed"
+    assert reopened.run == rerun.run
+    assert failing.calls == 1
+    failed = store.latest(selection.key)
+    assert failed is not None and failed.status == "failed"
+    active = ActiveReviews(store, lambda _: False).by_id(failed.id)
+    assert active is not None and active.retry_action == "retry"
 
 
 @pytest.mark.parametrize(

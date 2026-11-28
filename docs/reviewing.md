@@ -18,7 +18,7 @@ Neither operation posts to GitHub. You don’t need an [inbox](inbox.md) to revi
 
 A draft is pinned to the target branch, merge base, and head commit. Reopening the same current comparison under the same GitHub account resumes the saved draft without rerunning analysis or checking model configuration, but still needs access to the PR on GitHub. If the PR advances before completion, reopening can start a separate draft for the new comparison. The old draft remains pinned to its revision and accessible in **Reviews** or by run ID.
 
-Use **Retry review** in **Reviews**, or `loop-reviewer review --retry "$PR_URL"`, to replace a failed or interrupted attempt for the same comparison. If the comparison changed, submit the PR again to review the current revision. If the CLI says it saved a draft but couldn’t check history, use the printed `draft show RUN_ID` command to check its status.
+Use **Retry review** in **Reviews** to replace a failed or interrupted attempt, or **Re-run analysis** to try again after a partial draft. In the CLI, use `loop-reviewer review --retry "$PR_URL"`. Rerunning creates a separate draft; mixed-in manual edits are not carried over, and the edited draft remains available as **Previous draft** or by its original run ID. If the comparison changed, submit the PR again to review the current revision. If the CLI says it saved a draft but couldn’t check history, use the printed `draft show RUN_ID` command to check its status.
 
 ## Edit or copy feedback
 
@@ -36,7 +36,7 @@ Each successful edit prints the saved preview and increments its version. Findin
 
 The CLI’s edit inputs must be regular UTF-8 files of at most 64 KiB per field. It accepts LF and CRLF and saves LF. Keep the files private and delete them when no longer needed. `draft copy` writes Markdown to stdout, not to your clipboard; pipe or redirect it only to a destination you trust. Draft commands work offline without `gh` or model access.
 
-New drafts use report v6: the reviewer inspects pinned text and independently verifies candidate findings against cited source, without running a compiler. With no model available or no spending allowance, eligible files remain unfinished and the report has no behavioral findings. Available discussion references can still appear privately. Older saved reports, including v5 compiler findings, remain unchanged when reopened.
+New drafts use report v6: the reviewer inspects pinned text and independently verifies candidate findings against cited source, without running a compiler. With no spending allowance, eligible files remain unfinished and the report has no behavioral findings. Check [model setup](configuration.md#model-consent-and-budget) if you expected AI analysis. Available discussion references can still appear privately. Older saved reports, including v5 compiler findings, remain unchanged when reopened.
 
 The original report stays private and unchanged as you edit. A partial report lists unfinished coverage; “No verified findings in the reviewed scope” is not a clean bill of health. A complete report means the required checks finished, not that the PR is safe or approved. Drafts saved before original reports were introduced have no original report.
 

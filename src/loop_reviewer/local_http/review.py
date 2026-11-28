@@ -28,7 +28,12 @@ from loop_reviewer.local_http.models import (
     SQLiteId,
 )
 from loop_reviewer.local_http.session import JsonBodyRoute, require_empty_body
-from loop_reviewer.review.active import ActiveReview, ActiveReviews, ActiveStatus
+from loop_reviewer.review.active import (
+    ActiveReview,
+    ActiveReviews,
+    ActiveStatus,
+    RetryAction,
+)
 from loop_reviewer.review.drafts import EditReviewDraft
 from loop_reviewer.review.feedback import feedback_markdown
 from loop_reviewer.review.generate import (
@@ -43,6 +48,7 @@ from loop_reviewer.review.model import (
     DraftTarget,
     ReviewerFailureKind,
     ReviewIdentity,
+    ReviewKey,
     SavedDraft,
     SelectionChange,
 )
@@ -67,6 +73,8 @@ class SavedReviewRow(ResponseModel):
     failure_kind: ReviewerFailureKind | None
     publication_id: str | None
     changes: RevisionChanges = ()
+    previous_draft: bool = False
+    retry_action: RetryAction | None
 
     @classmethod
     def from_active(cls, active: ActiveReview) -> SavedReviewRow:
@@ -77,6 +85,8 @@ class SavedReviewRow(ResponseModel):
             status=active.status,
             failure=run.failure,
             failure_kind=run.failure_kind,
+            previous_draft=run.previous_draft,
+            retry_action=active.retry_action,
             publication_id=run.publication_id.value if run.publication_id else None,
         )
 
@@ -97,10 +107,14 @@ ReviewRow = Annotated[SavedReviewRow | LaunchReviewRow, Field(discriminator="kin
 
 def review_rows(active: ActiveReviews, launches: ReviewLaunches) -> list[ReviewRow]:
     snapshot = launches.snapshot()
-    saved = {
-        item.run.selection.key: SavedReviewRow.from_active(item)
-        for item in active.list()
-    }
+    saved: dict[ReviewKey, SavedReviewRow] = {}
+    previous: list[tuple[ReviewIdentity, SavedReviewRow]] = []
+    for item in active.list():
+        row = SavedReviewRow.from_active(item)
+        if row.previous_draft:
+            previous.append((item.run.selection.identity, row))
+        else:
+            saved[item.run.selection.key] = row
     transient: list[LaunchReviewRow] = []
     completed: dict[ReviewIdentity, bool] = {}
     for launch in snapshot:
@@ -124,11 +138,9 @@ def review_rows(active: ActiveReviews, launches: ReviewLaunches) -> list[ReviewR
                 continue
         if launch.status != "settled":
             if row is not None:
-                if launch.retry_run_id == int(row.run_id) and row.status in (
-                    "failed",
-                    "interrupted",
-                ):
+                if launch.retry_run_id == int(row.run_id) and row.retry_action:
                     row.status = launch.status
+                    row.retry_action = None
                 continue
             status = launch.status
         elif isinstance(result, DraftResult):
@@ -154,7 +166,11 @@ def review_rows(active: ActiveReviews, launches: ReviewLaunches) -> list[ReviewR
                 error=result if isinstance(result, ErrorResponse) else None,
             )
         )
-    return [*transient, *saved.values()]
+    return [
+        *transient,
+        *saved.values(),
+        *(row for identity, row in previous if not completed.get(identity)),
+    ]
 
 
 class DraftResponse(ResponseModel):
@@ -302,7 +318,7 @@ def routes(
         if (pending := launches.pending(key)) is not None:
             return pending
         item = active.by_id(id)
-        if item is None or item.status not in ("failed", "interrupted"):
+        if item is None or item.retry_action is None:
             if (pending := launches.pending(key)) is not None:
                 return pending
             raise ApiError(

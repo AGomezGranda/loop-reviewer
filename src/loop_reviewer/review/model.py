@@ -38,6 +38,7 @@ class PublicationReceipt:
 ReviewerFailureKind = Literal["setup", "input", "failed"]
 RetryableRunStatus = Literal["failed", "abandoned"]
 RunStatus = Literal["running", "draft_ready"] | RetryableRunStatus
+ReportStatus = Literal["complete", "partial", "failed"]
 SelectionChange = Literal[
     "target branch", "merge base", "head", "repository", "authenticated account"
 ]
@@ -412,6 +413,10 @@ class ReviewRun:
     def draft_target(self) -> DraftTarget:
         return DraftTarget(self.id, self.draft_version)
 
+    @property
+    def report_status(self) -> ReportStatus | None:
+        return None if self.report is None else self.report.root.status
+
     def require_draft_target(self, target: DraftTarget) -> None:
         if self.draft_target != target:
             raise DraftVersionMismatch("The draft changed.")
@@ -476,13 +481,21 @@ class ReviewRun:
             )
 
 
+def can_rerun_analysis(report_status: ReportStatus | None) -> bool:
+    return report_status == "partial"
+
+
 def prepare_unlocked_attempt(
     current: ReviewRun | None, *, retry: bool
 ) -> tuple[AttemptDisposition, ReviewRun | None]:
     if current is None:
         return ("no_retryable_run" if retry else "start"), None
     if current.status == "draft_ready":
-        return "resumed", None
+        return (
+            "replace"
+            if retry and can_rerun_analysis(current.report_status)
+            else "resumed"
+        ), None
     if current.status == "running":
         return ("replace" if retry else "abandoned"), current.abandon()
     return ("replace" if retry else current.status), None

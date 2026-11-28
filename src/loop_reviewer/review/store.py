@@ -8,6 +8,7 @@ from loop_reviewer.review.model import (
     CompletedReview,
     DraftTarget,
     PublicationReceipt,
+    ReportStatus,
     ReviewerFailureKind,
     ReviewIdentity,
     ReviewKey,
@@ -35,6 +36,8 @@ class UnfinishedReview:
     failure: str | None
     failure_kind: ReviewerFailureKind | None
     publication_id: PublicationId | None
+    previous_draft: bool = False
+    report_status: ReportStatus | None = None
 
 
 class UnfinishedReviewReader(Protocol):
@@ -49,7 +52,7 @@ class PublicationStore(CompletionReader, Protocol):
     def get_draft(self, run_id: int) -> ReviewRun | None: ...
 
     def save_preview(self, preview: PublicationPreview) -> None:
-        """Save for a current, open draft; reject an unresolved send for its identity."""
+        """Save for an open draft; reject an unresolved send for its identity."""
         ...
 
     def get_publication(self, id: PublicationId) -> PublicationRecord | None: ...
@@ -104,11 +107,11 @@ class DraftStore(CompletionReader, Protocol):
     def get_draft(self, run_id: int) -> ReviewRun | None: ...
 
     def save_edit(self, target: DraftTarget, run: ReviewRun) -> None:
-        """Save only for a current, open draft with no unresolved send for its identity."""
+        """Save only for an open draft with no unresolved send for its identity."""
         ...
 
     def complete(self, review: CompletedReview) -> CompletedReview:
-        """Atomically record the current draft or return its existing receipt.
+        """Atomically record the targeted draft or return its existing receipt.
 
         Reject a new completion while any send for the identity is unresolved.
         """
@@ -117,6 +120,10 @@ class DraftStore(CompletionReader, Protocol):
 
 class ReviewRunStore(CompletionReader, Protocol):
     def latest(self, key: ReviewKey) -> ReviewRun | None: ...
+
+    def latest_draft(self, key: ReviewKey) -> ReviewRun | None:
+        """Find the newest saved draft even if a newer attempt has no draft."""
+        ...
 
     def start(self, selection: ReviewSelection, *, replaces: int | None) -> ReviewRun:
         """Admit the run only while the initial review is open."""

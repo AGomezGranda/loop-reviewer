@@ -172,15 +172,38 @@ class CallQuote:
     call: ModelCall
     request_body: bytes
     tokens: TokenQuote
+    request_input_cap: int | None = None
+    verification_reserve: int | None = None
+
+    @property
+    def input_cap(self) -> int:
+        return (
+            self.tokens.input_cap
+            if self.request_input_cap is None
+            else self.request_input_cap
+        )
 
     @property
     def worst_case(self) -> int:
-        return self.tokens.worst_case
+        return self.tokens.charge(self.input_cap, self.tokens.output_cap)
+
+    @property
+    def investigation_reserve(self) -> int:
+        return (
+            self.verification_reserve
+            if self.verification_reserve is not None
+            else self.worst_case
+        )
 
 
 @dataclass(frozen=True)
 class UnsupportedModel:
     pass
+
+
+@dataclass(frozen=True)
+class RequestTooLarge(UnsupportedModel):
+    """The selected profile cannot fit this request, but may fit a smaller one."""
 
 
 @dataclass(frozen=True)

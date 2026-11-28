@@ -7,12 +7,12 @@ import pytest
 
 from loop_reviewer.reviewer.change_coverage import (
     ChangedLineExcerpt,
-    CoverageRange,
     PreparedCoverage,
     build_coverage_packet,
     prepare_coverage,
     required_ranges,
 )
+from loop_reviewer.reviewer.coverage_contract import CoverageRange
 from loop_reviewer.reviewer.integrations.git_hunks import decode_hunks
 from loop_reviewer.reviewer.integrations.git_inventory import open_local_comparison
 from loop_reviewer.reviewer.integrations.python_analyzer import CpythonAnalyzer

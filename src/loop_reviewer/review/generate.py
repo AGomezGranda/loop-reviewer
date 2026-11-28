@@ -17,6 +17,7 @@ from loop_reviewer.review.model import (
     ReviewSelection,
     SavedDraft,
     SelectionChange,
+    can_rerun_analysis,
     prepare_unlocked_attempt,
 )
 from loop_reviewer.review.pull_request import PullRequestNotReviewable, PullRequestRef
@@ -147,11 +148,13 @@ class ReviewPullRequest:
         if observe_selection is not None:
             observe_selection(selection)
         if retry_target is None:
-            latest = self._store.latest(key)
-            if latest is not None and latest.status == "draft_ready":
-                return self._history(identity) or DraftReview(
-                    "resumed", latest.saved_draft()
-                )
+            latest = self._store.latest(key) if retry else self._store.latest_draft(key)
+            if (
+                latest is not None
+                and latest.status == "draft_ready"
+                and not (retry and can_rerun_analysis(latest.report_status))
+            ):
+                return self._resume(latest)
 
         saved: SavedDraft | None = None
         try:
@@ -195,11 +198,16 @@ class ReviewPullRequest:
     def _prepare_attempt(
         self, selection: ReviewSelection, *, retry: bool, target: RetryTarget | None
     ) -> ReviewRun | ReviewOutcome:
+        if not retry and (draft := self._store.latest_draft(selection.key)) is not None:
+            return self._resume(draft)
         current = self._store.latest(selection.key)
         if target is not None and (
             current is None
             or current.id != target.run_id
-            or current.status == "draft_ready"
+            or (
+                current.status == "draft_ready"
+                and not can_rerun_analysis(current.report_status)
+            )
         ):
             raise ReviewRetryChanged
         action, abandoned = prepare_unlocked_attempt(current, retry=retry)
@@ -209,9 +217,7 @@ class ReviewPullRequest:
         if action in {"resumed", "failed", "replace"}:
             assert current is not None
             if action == "resumed":
-                return self._history(selection.identity) or DraftReview(
-                    "resumed", current.saved_draft()
-                )
+                return self._resume(current)
             if action == "failed":
                 assert current.failure is not None
                 return FailedReview(current.failure, current.failure_kind)
@@ -224,6 +230,11 @@ class ReviewPullRequest:
             return self._store.start(selection, replaces=replaces)
         except ReviewAlreadyCompleted as error:
             return FinishedReview(error.completion)
+
+    def _resume(self, draft: ReviewRun) -> ReviewOutcome:
+        return self._history(draft.selection.identity) or DraftReview(
+            "resumed", draft.saved_draft()
+        )
 
     def _history(self, identity: ReviewIdentity) -> FinishedReview | None:
         completed = self._store.completed(identity)

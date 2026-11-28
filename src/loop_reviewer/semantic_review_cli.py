@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import sys
 from pathlib import Path
 from time import monotonic
 
@@ -13,8 +14,7 @@ from loop_reviewer.reviewer.discussion_report import DiscussionReviewRequest
 from loop_reviewer.reviewer.full_review_contract import FullReviewRequest
 from loop_reviewer.reviewer.full_review_v6 import FullReviewRequestV6
 from loop_reviewer.reviewer.integrations.git_inventory import open_local_comparison
-from loop_reviewer.reviewer.integrations.openai_profiles import QUALIFIED_PROFILE
-from loop_reviewer.reviewer.integrations.openai_review import OpenAIReview
+from loop_reviewer.reviewer.integrations.pi_review import PiReview, PiSetupError
 from loop_reviewer.reviewer.integrations.python_analyzer import CpythonAnalyzer
 from loop_reviewer.reviewer.inventory_contract import (
     MAX_RUNTIME_SPEND,
@@ -47,7 +47,7 @@ def main() -> int:
     parser.add_argument(
         "--allow-provider",
         action="store_true",
-        help="Authorize sending selected pinned source to OpenAI when a model profile qualifies.",
+        help="Authorize sending selected pinned source to the configured Pi model.",
     )
     args = parser.parse_args()
     try:
@@ -87,11 +87,11 @@ def main() -> int:
         args.allow_provider
         and budget.max_model_spend_usd_micros
         and args.report_version in (5, 6)
-        and QUALIFIED_PROFILE is not None
     ):
-        key = os.environ.get("OPENAI_API_KEY", "")
-        if key:
-            model = OpenAIReview(key, profile=QUALIFIED_PROFILE)
+        try:
+            model = PiReview.require_configured(os.environ)
+        except PiSetupError as error:
+            print(f"AI analysis unavailable: {error}", file=sys.stderr)
 
     def open_source(pins: PinnedComparison):
         return open_local_comparison(args.repo, pins, environment)

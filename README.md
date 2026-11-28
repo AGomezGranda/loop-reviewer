@@ -24,7 +24,7 @@ mise exec -- uv run --locked loop-reviewer ui
 mise exec -- uv run --locked loop-reviewer review https://github.com/OWNER/REPO/pull/123
 ```
 
-Inbox setup is optional. New drafts use the pinned 2.0 reviewer. Analysis currently runs locally without a model and reports coverage gaps; generating a draft does not post to GitHub. For the CLI examples in the guides, use the same `mise exec -- uv run --locked` prefix if `loop-reviewer` isn’t on your `PATH`.
+Inbox setup is optional. By default, new drafts use pinned Git data without a model and report unfinished behavioral coverage. To enable model-backed investigation and verification for either interface, follow [model setup](docs/configuration.md#model-consent-and-budget) and run `loop-reviewer check-review-model` before starting a review. Generating a draft does not post to GitHub. For the CLI examples in the guides, use the same `mise exec -- uv run --locked` prefix if `loop-reviewer` isn’t on your `PATH`.
 
 In the browser, submit from the Inbox or the PR URL form, then open **Reviews** to track progress and open saved drafts. Each workspace server runs up to two reviews at a time and queues up to 32 more. Use **Retry review** in Reviews to restart an interrupted attempt for the saved comparison.
 

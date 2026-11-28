@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import override
 
@@ -29,6 +30,7 @@ def review(
     *,
     model: ScriptedModel | None,
     snapshot: DiscussionSnapshotV1 | None = None,
+    monotonic: Callable[[], float] = lambda: 0,
 ) -> FullReviewResultV6:
     report = review_full_v6(
         FullReviewRequestV6(
@@ -42,7 +44,7 @@ def review(
         ),
         lambda pins: open_local_comparison(path, pins, PATH_ENV),
         model,
-        lambda: 0,
+        monotonic,
     )
     return FullReviewResultV6.model_validate_json(report.model_dump_json())
 
@@ -374,6 +376,49 @@ def test_pinned_report_keeps_verification_bounded_and_fail_closed(
             assert work.reason == "missing_evidence"
             assert result.findings == ()
             assert [c.kind for c in model.calls] == ["investigation"]
+
+
+def test_slow_later_investigation_leaves_time_to_verify(tmp_path: Path) -> None:
+    init(tmp_path)
+    file = tmp_path / "config.ts"
+    for value in ("a", "b"):
+        file.write_text(
+            "".join(f'const setting{i:02d} = "{value * 140}";\n' for i in range(15))
+        )
+        commit(tmp_path)
+    now = 0.0
+
+    class SlowSecondPacket(PinnedClaimModel):
+        @override
+        def quote(self, call: ModelCall) -> CallQuote:
+            nonlocal now
+            if now == 0:
+                now = (
+                    79.0  # Most of the deadline has passed before investigation starts.
+                )
+            return super().quote(call)
+
+        @override
+        def send(
+            self, call: ModelCall, quote: CallQuote, *, timeout_seconds: float
+        ) -> ModelAttempt:
+            nonlocal now
+            if call.unit_id == "i00002":
+                self.calls.append(call)
+                now += timeout_seconds
+                return ModelAttempt("transient_error")
+            if call.unit_id == "i00001":
+                assert timeout_seconds >= 19
+                now += 19
+            else:
+                assert timeout_seconds == 20
+            return super().send(call, quote, timeout_seconds=timeout_seconds)
+
+    model = SlowSecondPacket("later-unit-stop")
+    result = review(tmp_path, model=model, monotonic=lambda: now).root
+    assert result.status == "partial"
+    assert [finding.id for finding in result.findings] == ["c00001"]
+    assert [call.unit_id for call in model.calls] == ["i00001", "i00002", "c00001"]
 
 
 @pytest.mark.parametrize(

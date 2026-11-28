@@ -3,9 +3,10 @@
 import json
 from bisect import bisect_left
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from itertools import zip_longest
 
+from loop_reviewer.reviewer.coverage_contract import CoveragePacket, CoverageRange
 from loop_reviewer.reviewer.full_review_contract import text_eligible
 from loop_reviewer.reviewer.inventory import RevisionSide
 from loop_reviewer.reviewer.inventory_contract import (
@@ -44,18 +45,6 @@ from loop_reviewer.reviewer.text_references import (
     TextReference,
     packet_references,
 )
-
-
-@dataclass(frozen=True)
-class CoverageRange:
-    file_id: str
-    source: SourceRange
-
-    def lines(self) -> Iterator[CoverageRange]:
-        for line in range(self.source.start_line, self.source.end_line + 1):
-            yield CoverageRange(
-                self.file_id, replace(self.source, start_line=line, end_line=line)
-            )
 
 
 def _runs(lines: Iterator[int]) -> Iterator[tuple[int, int]]:
@@ -151,6 +140,34 @@ class PreparedCoverage:
     supporting: tuple[ShownExcerpt, ...] = ()
     omissions: tuple[Omission, ...] = ()
     context: _PinnedContext | None = None
+
+    @property
+    def has_support(self) -> bool:
+        return self.context is not None or bool(self.supporting)
+
+    @property
+    def support_deadline(self) -> float | None:
+        return None if self.context is None else self.context.work.deadline
+
+    def packet(
+        self,
+        unoffered: frozenset[CoverageRange],
+        max_bytes: int,
+        *,
+        supporting_bytes: int,
+        supporting_fits: Callable[[str], bool] | None = None,
+        reference_bytes: int = 0,
+        reference_deadline: float | None = None,
+    ) -> CoveragePacket:
+        return build_coverage_packet(
+            self,
+            unoffered,
+            max_bytes,
+            supporting_bytes=supporting_bytes,
+            supporting_fits=supporting_fits,
+            reference_bytes=reference_bytes,
+            reference_deadline=reference_deadline,
+        )
 
 
 def _source(identifier: str, location: SourceRange, text: str) -> SourceEvidence:
@@ -293,13 +310,6 @@ def prepare_coverage(
         omissions=tuple(omissions),
         context=_PinnedContext(work, index),
     )
-
-
-@dataclass(frozen=True)
-class CoveragePacket:
-    bundle: EvidenceBundle
-    offered: frozenset[CoverageRange]
-    unsendable: frozenset[CoverageRange]
 
 
 def _json(value: object) -> str:

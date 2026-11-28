@@ -1428,8 +1428,15 @@ export interface components {
              * @enum {string}
              */
             kind: "saved";
+            /**
+             * Previousdraft
+             * @default false
+             */
+            previousDraft: boolean;
             /** Publicationid */
             publicationId: string | null;
+            /** Retryaction */
+            retryAction: ("retry" | "rerun") | null;
             /** Runid */
             runId: string;
             selection: components["schemas"]["SelectionResponse"];

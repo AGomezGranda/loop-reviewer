@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from loop_reviewer.review.model import ReviewIdentity, ReviewKey
+from loop_reviewer.review.model import ReviewIdentity, ReviewKey, can_rerun_analysis
 from loop_reviewer.review.store import UnfinishedReview, UnfinishedReviewReader
 
 type ActiveStatus = Literal[
@@ -16,11 +16,23 @@ type ActiveStatus = Literal[
     "status_unavailable",
 ]
 
+RetryAction = Literal["retry", "rerun"]
+
 
 @dataclass(frozen=True)
 class ActiveReview:
     run: UnfinishedReview
     status: ActiveStatus
+
+    @property
+    def retry_action(self) -> RetryAction | None:
+        if self.run.previous_draft:
+            return None
+        if self.status in ("failed", "interrupted"):
+            return "retry"
+        if self.status == "draft_ready" and can_rerun_analysis(self.run.report_status):
+            return "rerun"
+        return None
 
 
 class ActiveReviews:

@@ -41,13 +41,41 @@ in **Setup**, rerun CLI setup, or add an `[inbox]` section. An absent
 
 ## Model consent and budget
 
-Analysis runs locally by default. `LOOP_REVIEWER_MAX_MODEL_SPEND_USD_MICROS`
-accepts an integer from `0` (the default) through `3000000` ($3) in the
-process environment at launch. A positive allowance explicitly authorizes
-sending selected pinned source to OpenAI using `OPENAI_API_KEY` if an exact
-provider profile is qualified. Set the key in the environment, not in TOML.
+The CLI and browser run the local reviewer on pinned Git data. To enable AI
+investigation and verification, put Pi 1.7.0 on PATH, authenticate the desired
+provider in Pi, and set both variables before launching the CLI or web server:
 
-No profile is currently qualified. A positive allowance without a qualified
-profile or key still runs the same reviewer locally and reports the missing
-model coverage. There is no provider fallback. Resuming a saved draft does
-not consult the allowance or rerun analysis.
+```sh
+export LOOP_REVIEWER_PI_MODEL='provider/exact-model-id'
+export LOOP_REVIEWER_MAX_MODEL_SPEND_USD_MICROS=500000
+loop-reviewer check-review-model
+```
+
+Use the provider and model ID from your Pi catalog. The spend allowance is in
+millionths of a US dollar ($0.50 above), from zero (the default) through $3.
+These settings authorize sending selected pinned excerpts to that Pi provider.
+Pi can use its saved credentials or the selected OpenAI or Anthropic API key.
+For standalone v5/v6 reviews, use the same model selector and pass
+`--allow-provider --max-model-spend-usd-micros 500000` instead of the budget variable.
+
+Each investigation and verification uses a fresh Pi process in an empty
+directory. The bundled extension makes one text request, with tools, project
+instructions, session storage and provider retries disabled. The adapter supports
+Pi's OpenAI Completions, OpenAI Responses (including Codex), and Anthropic Messages protocols with
+a bounded completion and positive catalog prices. Keep prices and context limits
+accurate for custom endpoints. The reviewer quotes the serialized prompt in UTF-8
+bytes plus a margin for provider framing, and reserves up to 2,048 output tokens
+per call. The configured model's context window limits what can be sent, not
+what is reserved. Investigation also protects time and budget for verification.
+
+`check-review-model` checks the catalog, configured credentials, and the budget
+floor without sending a provider request. It cannot validate credentials with the
+provider or guarantee that a particular PR fits the allowance. Run it in the same
+environment you use to launch the browser workspace; restart the workspace after
+changing settings.
+
+Zero allowance keeps the review local. Invalid model setup is reported when starting
+a new hosted review; an allowance too small for the actual comparison leaves AI
+coverage unfinished. Resuming a saved draft does not contact Pi or rerun analysis.
+Use **Re-run analysis** in Reviews or `loop-reviewer review --retry PR_URL` for a
+partial draft. The historical replay tool has its own frozen model configuration.

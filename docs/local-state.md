@@ -2,7 +2,7 @@
 
 ## What leaves your machine
 
-Generating a new draft fetches the pinned comparison and captures discussion from GitHub. Analysis is local by default. With explicit [model consent](configuration.md#model-consent-and-budget), a qualified provider may receive selected pinned source, but not GitHub tokens or discussion. The saved report may contain private source excerpts and leads, but not raw model output or discussion bodies. Generating, editing, copying, or finishing a draft does not post it to GitHub. A [confirmed publication or an explicit resend](publishing.md) is what submits the previewed review.
+Generating a new draft fetches the pinned comparison and captures discussion from GitHub. Analysis is local by default. With explicit [model consent](configuration.md#model-consent-and-budget), the configured Pi provider may receive selected pinned source, but not GitHub tokens or discussion. The saved report may contain private source excerpts and leads, but not raw model output or discussion bodies. Generating, editing, copying, or finishing a draft does not post it to GitHub. A [confirmed publication or an explicit resend](publishing.md) is what submits the previewed review.
 
 Git fetch caps each pack at 256 MiB. Intake verifies both pins and opens a private object view for bounded analysis without a checkout or a whole-patch requirement. Loop-reviewer attempts to remove them on normal exit and failure and warns if cleanup fails. A hard kill can leave scratch data in the OS temporary directory without a warning.
 

@@ -22,6 +22,13 @@ MAX_CALLS = 10
 MAX_VERIFICATIONS = 4
 RETRYABLE = frozenset({"invalid_output", "truncated", "transient_error"})
 BudgetBlock = Literal["work_limit", "budget_exhausted", "accounting_fault"]
+_VERIFICATION_ATTEMPTS_RESERVED = 2
+
+
+def protected_investigation_cost(quote: CallQuote) -> int:
+    return (
+        quote.worst_case + _VERIFICATION_ATTEMPTS_RESERVED * quote.investigation_reserve
+    )
 
 
 @dataclass(frozen=True)
@@ -71,10 +78,12 @@ class SpendLedger:
         self._fault = False
         self.blocked_reason: BudgetBlock | None = None
 
-    def investigation_context_fits(self, quote: CallQuote, later_packets: int) -> bool:
-        # Budget up to two attempts per preceding packet and protected dispatch of the last.
+    def investigation_context_fits(self, quote: CallQuote, later_cost: int) -> bool:
         return (
-            self._spent + self._held + (3 + 2 * later_packets) * quote.worst_case
+            self._spent
+            + self._held
+            + protected_investigation_cost(quote)
+            + 2 * later_cost
             <= self.amount
         )
 
@@ -101,6 +110,8 @@ class SpendLedger:
                 tokens.output_micros_per_million,
             )
             <= 0
+            or not 0 < quote.input_cap <= tokens.input_cap
+            or quote.investigation_reserve <= 0
             or (self._tokens is not None and self._tokens != tokens)
         ):
             raise ValueError("Model quote does not match the run profile")
@@ -126,21 +137,28 @@ class SpendLedger:
             >= MAX_VERIFICATIONS
         ):
             return "work_limit"
-        slots = 3 if protects else 1
+        slots = 1 + _VERIFICATION_ATTEMPTS_RESERVED if protects else 1
         if self._calls + slots > self._call_limit:
             return "work_limit"
-        if (
-            not self.amount
-            or self._spent + self._held + slots * quote.worst_case > self.amount
-        ):
+        required = protected_investigation_cost(quote) if protects else quote.worst_case
+        if not self.amount or self._spent + self._held + required > self.amount:
             return "budget_exhausted"
         return None
 
-    def dispatch(self, model: ReviewModel, reservation: Reservation) -> ModelAttempt:
+    def dispatch(
+        self,
+        model: ReviewModel,
+        reservation: Reservation,
+        *,
+        deadline: float | None = None,
+    ) -> ModelAttempt:
         if reservation is not self._active or self._dispatched:
             raise ValueError("Dispatch requires an unused reservation")
         self._dispatched = True
-        time_left = self.deadline - self._monotonic()
+        time_left = (
+            min(self.deadline, deadline if deadline is not None else self.deadline)
+            - self._monotonic()
+        )
         if time_left <= 0:
             # No I/O took place; the caller can settle this authorized slot at zero.
             return ModelAttempt("transient_error", TokenUsage(0, 0, 0), output_bytes=0)
@@ -171,9 +189,9 @@ class SpendLedger:
             return
         tokens = quote.tokens
         over = (
-            usage.input_tokens > tokens.input_cap
+            usage.input_tokens > quote.input_cap
             or usage.output_tokens > tokens.output_cap
-            or usage.total_tokens > tokens.input_cap + tokens.output_cap
+            or usage.total_tokens > quote.input_cap + tokens.output_cap
         )
         self._fault |= over
         if min(counts) < 0 or sum(counts[:2]) != usage.total_tokens:

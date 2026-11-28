@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "gortex": {
+      "command": "gortex",
+      "args": [
+        "mcp",
+        "--tools",
+        "readonly"
+      ],
+      "exposure": "deferred"
+    }
+  }
+}

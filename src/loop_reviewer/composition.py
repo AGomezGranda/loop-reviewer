@@ -52,8 +52,12 @@ from loop_reviewer.reviewer.discussion_contract import (
     unavailable_discussion,
 )
 from loop_reviewer.reviewer.integrations.git_inventory import open_local_comparison
-from loop_reviewer.reviewer.integrations.openai_profiles import QUALIFIED_PROFILE
-from loop_reviewer.reviewer.integrations.openai_review import OpenAIReview
+from loop_reviewer.reviewer.integrations.pi_review import (
+    PI_ENV,
+    PI_SETTINGS,
+    PiReview,
+    PiSetupError,
+)
 from loop_reviewer.reviewer.inventory_contract import (
     MAX_RUNTIME_SPEND,
     InventoryBudget,
@@ -61,6 +65,7 @@ from loop_reviewer.reviewer.inventory_contract import (
 )
 from loop_reviewer.reviewer.model_contract import ReviewModel
 from loop_reviewer.reviewer.pinned_source import PinnedSource
+from loop_reviewer.reviewer.semantic_batch import minimum_investigation_spend
 
 _MODEL_SPEND = "LOOP_REVIEWER_MAX_MODEL_SPEND_USD_MICROS"
 
@@ -81,17 +86,13 @@ def _hosted_model(
         raise ReviewerError(
             f"Set {_MODEL_SPEND} to an integer from 0 to {MAX_RUNTIME_SPEND}.", "setup"
         ) from None
-    if (
-        budget.max_model_spend_usd_micros
-        and QUALIFIED_PROFILE is not None
-        and (key := environment.get("OPENAI_API_KEY"))
-    ):
-        return (
-            budget,
-            OpenAIReview(key, profile=QUALIFIED_PROFILE),
-            QUALIFIED_PROFILE.tokens.profile,
-        )
-    return budget, None, None
+    if not budget.max_model_spend_usd_micros:
+        return budget, None, None
+    try:
+        model = PiReview.require_configured(environment)
+    except PiSetupError as error:
+        raise ReviewerError(str(error), "setup") from error
+    return budget, model, model.tokens.profile
 
 
 class Workflows:
@@ -101,13 +102,13 @@ class Workflows:
         self._state = state
         self._model_environment = {
             name: environment[name]
-            for name in (_MODEL_SPEND, "OPENAI_API_KEY")
+            for name in (_MODEL_SPEND, *PI_ENV)
             if name in environment
         }
         self._environment = {
             name: value
             for name, value in environment.items()
-            if name not in (_MODEL_SPEND, "OPENAI_API_KEY")
+            if name not in (_MODEL_SPEND, *PI_SETTINGS)
         }
         self._database = state / "reviews.sqlite3"
         store = SqliteInboxStore(self._database)
@@ -115,6 +116,28 @@ class Workflows:
             config_path,
             ConfigureInbox(GhRepositoryDiscovery(self._environment)),
             store,
+        )
+
+    @staticmethod
+    def check_review_model(environment: dict[str, str]) -> str:
+        budget, model, name = _hosted_model(environment)
+        if model is None:
+            return f"AI analysis is off. Set {_MODEL_SPEND} to a positive allowance to enable it."
+        minimum = minimum_investigation_spend(model)
+        if minimum is None:
+            raise ReviewerError(
+                "The selected model cannot fit the review instructions.", "setup"
+            )
+        if budget.max_model_spend_usd_micros < minimum:
+            raise ReviewerError(
+                "The allowance cannot start an investigation with verification reserved. "
+                f"Set {_MODEL_SPEND} to at least {minimum} for this model; PR evidence needs additional allowance.",
+                "setup",
+            )
+        return (
+            f"Pi model {name} is configured. The allowance covers an empty investigation "
+            f"with verification reserved ({minimum} USD micros); PR evidence adds cost. "
+            "No provider request was made."
         )
 
     def select(self, ref: PullRequestRef) -> ReviewSelection:

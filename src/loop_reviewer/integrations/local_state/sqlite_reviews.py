@@ -40,6 +40,7 @@ from loop_reviewer.review.model import (
     ReviewKey,
     ReviewRun,
     ReviewSelection,
+    can_rerun_analysis,
     is_retryable_status,
     require_run_id,
 )
@@ -75,10 +76,17 @@ class SqliteReviewRunStore:
         self._now = now if now is not None else lambda: datetime.now(UTC)
 
     def latest(self, key: ReviewKey) -> ReviewRun | None:
+        return self._for_key(key, draft_only=False)
+
+    def latest_draft(self, key: ReviewKey) -> ReviewRun | None:
+        return self._for_key(key, draft_only=True)
+
+    def _for_key(self, key: ReviewKey, *, draft_only: bool) -> ReviewRun | None:
+        condition = "status = 'draft_ready'" if draft_only else "is_current = 1"
         with self._read() as connection:
             row = connection.execute(
                 f"SELECT {_RUN_COLUMNS} FROM review_runs "
-                "WHERE review_key = ? AND is_current = 1",
+                f"WHERE review_key = ? AND {condition} ORDER BY id DESC LIMIT 1",
                 (comparison_key(key),),
             ).fetchone()
             if row is None:
@@ -122,16 +130,23 @@ class SqliteReviewRunStore:
         result: list[UnfinishedReview] = []
         with self._read() as connection:
             query = (
-                "SELECT id, selection, status, failure, failure_kind FROM review_runs "
-                "WHERE is_current = 1"
+                "SELECT id, selection, status, failure, failure_kind, is_current, "
+                "json_extract(reviewer_report, '$.status') FROM review_runs "
+                "WHERE (is_current = 1 OR status = 'draft_ready')"
             )
             parameters: tuple[int, ...] = ()
             if run_id is not None:
                 query += " AND id = ?"
                 parameters = (run_id,)
-            for id, raw_selection, status, failure, kind in connection.execute(
-                query + " ORDER BY id DESC", parameters
-            ):
+            for (
+                id,
+                raw_selection,
+                status,
+                failure,
+                kind,
+                current,
+                report_status,
+            ) in connection.execute(query + " ORDER BY id DESC", parameters):
                 selection = selection_from_json(raw_selection)
                 key = identity_key(selection.identity)
                 completed, publication = connection.execute(
@@ -151,9 +166,18 @@ class SqliteReviewRunStore:
                     )
                 except AttributeError, TypeError, PublicationError:
                     raise ReviewStoreError(_UNREADABLE) from None
+                if report_status not in (None, "complete", "partial", "failed"):
+                    raise ReviewStoreError(_UNREADABLE)
                 result.append(
                     UnfinishedReview(
-                        run_id, selection, status, failure, kind, publication_id
+                        run_id,
+                        selection,
+                        status,
+                        failure,
+                        kind,
+                        publication_id,
+                        previous_draft=not current,
+                        report_status=report_status,
                     )
                 )
         return tuple(result)
@@ -459,7 +483,7 @@ class SqliteReviewRunStore:
             cursor = connection.execute(
                 """
                 UPDATE review_runs SET draft = ?, draft_version = draft_version + 1
-                WHERE id = ? AND is_current = 1 AND status = 'draft_ready'
+                WHERE id = ? AND status = 'draft_ready'
                     AND draft_version = ? AND draft_version < ?
                 """,
                 (
@@ -477,7 +501,7 @@ class SqliteReviewRunStore:
     ) -> ReviewRun | None:
         row = connection.execute(
             f"SELECT {_RUN_COLUMNS} FROM review_runs "
-            "WHERE id = ? AND is_current = 1 AND status = 'draft_ready'",
+            "WHERE id = ? AND status = 'draft_ready'",
             (run_id,),
         ).fetchone()
         return None if row is None else run_from_row(row)
@@ -501,7 +525,14 @@ class SqliteReviewRunStore:
                     raise ReviewStoreError(
                         "The review attempt to retry is no longer current."
                     )
-                if not is_retryable_status(current[1]):
+                if current[1] == "draft_ready":
+                    old = self._draft_for_run(connection, replaces)
+                    if old is None or not can_rerun_analysis(old.report_status):
+                        raise ReviewStoreError(
+                            "Only partial draft analysis can be rerun."
+                        )
+                    self._require_no_unconfirmed(connection, selection.identity)
+                elif not is_retryable_status(current[1]):
                     raise ReviewStoreError(
                         "Only a failed or abandoned attempt can be retried."
                     )

@@ -89,3 +89,32 @@ forbidden_modules =
     loop_reviewer.local_http
     loop_reviewer.review
     loop_reviewer.reviewer
+
+[importlinter:contract:8]
+name = Pinned local evidence and AI review are independent of each other and their adapters
+type = forbidden
+source_modules =
+    loop_reviewer.reviewer.local_reviewer
+    loop_reviewer.reviewer.ai_reviewer
+forbidden_modules =
+    loop_reviewer.reviewer.integrations
+
+[importlinter:contract:9]
+name = AI review and batching depend on coverage contracts, not pinned evidence assembly
+type = forbidden
+source_modules =
+    loop_reviewer.reviewer.ai_reviewer
+    loop_reviewer.reviewer.semantic_batch
+forbidden_modules =
+    loop_reviewer.reviewer.local_reviewer
+    loop_reviewer.reviewer.change_coverage
+
+[importlinter:contract:10]
+name = Pinned evidence assembly is independent of AI orchestration
+type = forbidden
+source_modules =
+    loop_reviewer.reviewer.local_reviewer
+    loop_reviewer.reviewer.change_coverage
+forbidden_modules =
+    loop_reviewer.reviewer.ai_reviewer
+    loop_reviewer.reviewer.semantic_batch

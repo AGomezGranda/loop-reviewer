@@ -24,9 +24,11 @@ const retryGuidance = {
 
 function RetryReview({
 	runId,
+	rerun = false,
 	onRetried,
 }: {
 	runId: string;
+	rerun?: boolean;
 	onRetried: () => void;
 }) {
 	const retry = useMutation({
@@ -41,7 +43,11 @@ function RetryReview({
 				disabled={retry.isPending}
 				onClick={() => retry.mutate()}
 			>
-				{retry.isPending ? "Submitting…" : "Retry review"}
+				{retry.isPending
+					? "Submitting…"
+					: rerun
+						? "Re-run analysis"
+						: "Retry review"}
 			</Button>
 			{retry.error && (
 				<p role="alert" className="text-sm text-destructive">
@@ -88,7 +94,13 @@ export function ReviewsScreen({
 								className="flex flex-wrap items-start justify-between gap-3 px-4 py-3"
 							>
 								<div className="min-w-0 space-y-1">
-									<p className="text-sm font-medium">{labels[row.status]}</p>
+									<p className="text-sm font-medium">
+										{row.kind === "saved" &&
+										row.previousDraft &&
+										row.status === "draft_ready"
+											? "Previous draft"
+											: labels[row.status]}
+									</p>
 									<a
 										href={url}
 										target="_blank"
@@ -134,10 +146,13 @@ export function ReviewsScreen({
 									row.status === "recovery_required" &&
 									row.publicationId &&
 									recoveryLink(row.publicationId)}
-								{row.kind === "saved" &&
-									(row.status === "failed" || row.status === "interrupted") && (
-										<RetryReview runId={row.runId} onRetried={onRetried} />
-									)}
+								{row.kind === "saved" && row.retryAction && (
+									<RetryReview
+										runId={row.runId}
+										rerun={row.retryAction === "rerun"}
+										onRetried={onRetried}
+									/>
+								)}
 								{row.kind === "launch" &&
 									row.completedRunId &&
 									historyLink(row.completedRunId)}
