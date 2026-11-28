@@ -6,8 +6,11 @@ from typing import Literal
 from loop_reviewer.reviewer.local_check_contract import SourceEvidence, SourceLocation
 from loop_reviewer.reviewer.local_evidence import EvidenceIndex, LocalEvidenceWork
 from loop_reviewer.reviewer.model_contract import Candidate, Impact, VerificationReplyV1
-from loop_reviewer.reviewer.pinned_source import PinnedTextBlob, SourceRange
-from loop_reviewer.reviewer.python_context import changed_lines
+from loop_reviewer.reviewer.pinned_source import (
+    PinnedTextBlob,
+    SourceRange,
+    changed_lines,
+)
 from loop_reviewer.reviewer.semantic_inputs import (
     BundleFile,
     EvidenceBundle,

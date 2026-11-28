@@ -43,12 +43,9 @@ from loop_reviewer.reviewer.pinned_source import (
     PinnedSource,
     ReadFailure,
     SourceRange,
-)
-from loop_reviewer.reviewer.python_context import (
-    PythonAnalysis,
-    PythonAnalyzer,
     changed_lines,
 )
+from loop_reviewer.reviewer.python_context import PythonAnalysis, PythonAnalyzer
 
 
 @dataclass

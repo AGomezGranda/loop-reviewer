@@ -21,8 +21,14 @@ from loop_reviewer.reviewer.local_evidence import (
     collect_python_context,
     python_sides,
 )
-from loop_reviewer.reviewer.pinned_source import Hunk, SourceRange, lf_lines
-from loop_reviewer.reviewer.python_context import PythonAnalysis, changed_lines
+from loop_reviewer.reviewer.pinned_source import (
+    Hunk,
+    LineSpan,
+    SourceRange,
+    changed_lines,
+    lf_lines,
+)
+from loop_reviewer.reviewer.python_context import PythonAnalysis
 from loop_reviewer.reviewer.text_references import literal_references
 
 MAX_FILES = 16
@@ -344,6 +350,17 @@ def _target(
     )
 
 
+def _covers_legacy_span(
+    loc: SourceLocation, side: RevisionSide, file: FileSide, span: LineSpan
+) -> bool:
+    return (
+        loc.side == side
+        and (loc.path, loc.blob_id) == (file.path, file.object_id)
+        and loc.start_line <= span.start_line
+        and loc.end_line >= span.start_line + span.line_count - 1
+    )
+
+
 def _all_hunks_presented(target: _Target, shown: dict[str, ShownExcerpt]) -> bool:
     for hunk in target.patch:
         for side, span, file in (
@@ -354,10 +371,7 @@ def _all_hunks_presented(target: _Target, shown: dict[str, ShownExcerpt]) -> boo
                 continue
             if file is None or not any(
                 item.source.id in shown
-                and (loc := item.source.range).side == side
-                and (loc.path, loc.blob_id) == (file.path, file.object_id)
-                and loc.start_line <= span.start_line
-                and loc.end_line >= span.start_line + span.line_count - 1
+                and _covers_legacy_span(item.source.range, side, file, span)
                 for item in target.excerpts
             ):
                 return False

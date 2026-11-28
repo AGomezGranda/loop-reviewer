@@ -1,5 +1,6 @@
 """Read evidence from the two commits of a pinned local comparison."""
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -43,6 +44,17 @@ class Hunk:
     old_span: LineSpan
     new_span: LineSpan
     patch: bytes
+
+
+def changed_lines(hunk: Hunk, side: RevisionSide) -> Iterator[int]:
+    line = hunk.old_span.start_line if side == "base" else hunk.new_span.start_line
+    edit = b"-" if side == "base" else b"+"
+    for record in lf_lines(hunk.patch)[1:]:
+        marker = record[:1]
+        if marker == edit:
+            yield line
+        if marker in (edit, b" "):
+            line += 1
 
 
 @dataclass(frozen=True)

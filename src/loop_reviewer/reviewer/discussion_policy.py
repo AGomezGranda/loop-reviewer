@@ -18,8 +18,7 @@ from loop_reviewer.reviewer.local_evidence import (
     WorkLimit,
     python_sides,
 )
-from loop_reviewer.reviewer.pinned_source import SourceRange
-from loop_reviewer.reviewer.python_context import changed_lines
+from loop_reviewer.reviewer.pinned_source import SourceRange, changed_lines
 from loop_reviewer.reviewer.semantic_policy import Finding
 
 # Each attachment consumes an inspection, so this also bounds the reference count below 100.

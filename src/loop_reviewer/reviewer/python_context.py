@@ -3,7 +3,7 @@
 import codecs
 import re
 from collections import Counter
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass
 from io import BytesIO
 from tokenize import detect_encoding
@@ -16,6 +16,7 @@ from loop_reviewer.reviewer.pinned_source import (
     PinnedTextBlob,
     ReadFailure,
     SourceRange,
+    changed_lines,
     lf_lines,
 )
 
@@ -82,17 +83,6 @@ class PythonAnalyzer(Protocol):
     def analyze(
         self, blob: PinnedTextBlob, *, timeout_seconds: float
     ) -> PythonAnalysis | ReadFailure: ...
-
-
-def changed_lines(hunk: Hunk, side: RevisionSide) -> Iterator[int]:
-    line = hunk.old_span.start_line if side == "base" else hunk.new_span.start_line
-    edit = b"-" if side == "base" else b"+"
-    for record in lf_lines(hunk.patch)[1:]:
-        marker = record[:1]
-        if marker == edit:
-            yield line
-        if marker in (edit, b" "):
-            line += 1
 
 
 def _range(blob: PinnedTextBlob, start: int, end: int) -> SourceRange:

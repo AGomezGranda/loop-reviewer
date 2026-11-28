@@ -14,7 +14,7 @@ from loop_reviewer.reviewer.model_contract import (
     CitationRole,
     VerificationReplyV1,
 )
-from loop_reviewer.reviewer.python_context import changed_lines
+from loop_reviewer.reviewer.pinned_source import changed_lines
 from loop_reviewer.reviewer.semantic_inputs import EvidenceBundle, ShownExcerpt
 from loop_reviewer.reviewer.semantic_policy import (
     IMPACT_ORDER,
