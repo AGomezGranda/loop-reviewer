@@ -170,6 +170,7 @@ def _run_ui() -> int:
             review_pull_request=workflows.review,
             drafts=workflows.edit_review_draft(),
             review_history=workflows.review_history(),
+            review_stats=workflows.review_stats(),
             active_reviews=workflows.active_reviews(),
             prepare=workflows.prepare_publication(),
             publish=workflows.publish_review(),

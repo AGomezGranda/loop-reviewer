@@ -13,6 +13,7 @@ from loop_reviewer.integrations.local_state.inbox_schema import (
     rename_inbox_projects,
 )
 from loop_reviewer.integrations.local_state.review_schema import (
+    add_completion_recorded_at,
     add_generation_metadata,
     add_reviewer_report,
     migrate_reviews,
@@ -26,6 +27,7 @@ _MIGRATIONS = (
     (10, add_reviewer_report),
     (11, add_title_exclusions),
     (12, add_inbox_scan_version),
+    (13, add_completion_recorded_at),
 )
 _SCHEMA_VERSION = _MIGRATIONS[-1][0]
 

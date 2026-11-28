@@ -22,6 +22,8 @@ Reviews saved with a stable GitHub repository ID can be reopened at the new URL 
 
 ## Back up before upgrading
 
-Stop all processes that can write state, including browser workspaces and terminal watchers, before backing up `reviews.sqlite3`. The current schema is v12. Upgrading preserves existing drafts, exact publication previews, completion history, and inbox data. Older releases cannot open the upgraded database.
+Stop all processes that can write state, including browser workspaces and terminal watchers, before backing up `reviews.sqlite3`. The current schema is v13. Upgrading preserves existing drafts, exact publication previews, completion history, and inbox data. Older releases cannot open the upgraded database.
+
+Stats uses the time Loop Reviewer first records a local completion or a confirmed GitHub publication, including when confirmation happens during recovery. Completions saved before v13 have no recorded date: they count in all-time totals but not in recent counts or weekly activity.
 
 Prefer rolling forward. If you need to roll back, first [recover unresolved publication attempts](publishing.md#if-you-dont-know-whether-github-received-it) and preserve the upgraded database and its receipts separately. Restoring a pre-upgrade backup does not undo GitHub reviews or include publication records created since the backup. Reconcile the restored database with the preserved state and GitHub before enabling publication again.

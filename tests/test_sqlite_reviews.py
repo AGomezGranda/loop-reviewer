@@ -7,6 +7,7 @@ import stat
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier
 from typing import Protocol
@@ -519,7 +520,7 @@ def test_upgrades_v1_drafts_without_changing_selection(tmp_path: Path) -> None:
         assert connection.execute("SELECT selection FROM review_runs").fetchone() == (
             original_json,
         )
-        assert connection.execute("PRAGMA user_version").fetchone() == (12,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (13,)
     finally:
         connection.close()
 
@@ -549,7 +550,66 @@ def test_upgrades_v8_with_unpriced_draft_and_completion(tmp_path: Path) -> None:
     assert completion.final_draft == ReviewDraft("approved", "legacy", ())
     assert _store(tmp_path).complete(completion) == completion
     with sqlite3.connect(_path(tmp_path)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (12,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (13,)
+
+
+def test_upgrades_v12_completion_without_inventing_a_date(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    completion = store.complete(_saved(store).complete_locally())
+    with sqlite3.connect(_path(tmp_path)) as connection:
+        connection.execute("ALTER TABLE review_completions DROP COLUMN recorded_at")
+        connection.execute("PRAGMA user_version = 12")
+
+    reopened = _store(tmp_path)
+    assert reopened.completion(completion.source.run_id) == completion
+    with sqlite3.connect(_path(tmp_path)) as connection:
+        assert connection.execute(
+            "SELECT recorded_at FROM review_completions"
+        ).fetchone() == (None,)
+
+
+@pytest.mark.parametrize("published", [False, True], ids=["local", "published"])
+def test_first_completion_records_time_without_restamping(
+    tmp_path: Path, published: bool
+) -> None:
+    now = datetime(2026, 11, 30, tzinfo=UTC)
+    store = SqliteReviewRunStore(_path(tmp_path), now=lambda: now)
+    if published:
+        _, preview = _publication_setup(store)
+        store.reserve_send(preview.id, "preview")
+        receipt = PublicationReceipt(45, "comment")
+
+        def finish() -> None:
+            store.record_published(preview.id, receipt)
+    else:
+        completion = _saved(store).complete_locally()
+
+        def finish() -> None:
+            store.complete(completion)
+
+    finish()
+    first = int(now.timestamp())
+    now = now.replace(hour=1)
+    finish()
+    with sqlite3.connect(_path(tmp_path)) as connection:
+        assert connection.execute(
+            "SELECT recorded_at FROM review_completions"
+        ).fetchall() == [(first,)]
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    ["publication_status = 'invalid'", "recorded_at = -1", "recorded_at = 1.5"],
+    ids=["status", "negative-time", "fractional-time"],
+)
+def test_stats_rejects_invalid_saved_facts(tmp_path: Path, assignment: str) -> None:
+    store = _store(tmp_path)
+    store.complete(_saved(store).complete_locally())
+    with sqlite3.connect(_path(tmp_path)) as connection:
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(f"UPDATE review_completions SET {assignment}")
+    with pytest.raises(ReviewStoreError, match="unreadable"):
+        store.completion_facts()
 
 
 def test_upgrades_v9_without_changing_legacy_feedback_or_pending_send(
@@ -571,6 +631,7 @@ def test_upgrades_v9_without_changing_legacy_feedback_or_pending_send(
             "ALTER TABLE inbox_settings DROP COLUMN excluded_title_terms"
         )
         connection.execute("ALTER TABLE inbox_settings DROP COLUMN scan_version")
+        connection.execute("ALTER TABLE review_completions DROP COLUMN recorded_at")
         connection.execute("PRAGMA user_version = 9")
 
     reopened = _store(tmp_path)
@@ -582,7 +643,7 @@ def test_upgrades_v9_without_changing_legacy_feedback_or_pending_send(
             connection.execute("SELECT preview FROM review_publications").fetchone()
             == original
         )
-        assert connection.execute("PRAGMA user_version").fetchone() == (12,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (13,)
     reopened.record_rejection(preview.id)
     assert reopened.complete(run.complete_locally()).final_draft == run.draft
 
@@ -610,6 +671,7 @@ def _restore_v6_schema(connection: sqlite3.Connection) -> None:
         ALTER TABLE review_runs DROP COLUMN reviewer_report;
         ALTER TABLE review_runs DROP COLUMN estimated_cost_usd;
         ALTER TABLE review_runs DROP COLUMN generation_model;
+        ALTER TABLE review_completions DROP COLUMN recorded_at;
         ALTER TABLE review_completions DROP COLUMN estimated_cost_usd;
         ALTER TABLE review_completions DROP COLUMN generation_model;
         DROP INDEX review_runs_activity;
@@ -652,7 +714,7 @@ def test_upgrade_from_v5_preserves_edited_drafts_and_local_history(
     assert reopened.completed(_SELECTION.identity) == legacy_completion
     assert reopened.complete(completion) == legacy_completion
     with sqlite3.connect(_path(tmp_path)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (12,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (13,)
         assert connection.execute(
             "SELECT github_review_id, publication_action FROM review_completions"
         ).fetchone() == (None, None)
@@ -815,6 +877,10 @@ def test_publication_completion_is_atomic(tmp_path: Path) -> None:
     assert record is not None and record.status == "unconfirmed"
     assert reopened.completed(run.selection.identity) is None
     with sqlite3.connect(_path(tmp_path)) as connection:
+        assert (
+            connection.execute("SELECT recorded_at FROM review_completions").fetchall()
+            == []
+        )
         connection.execute("DROP TRIGGER fail_publish")
     completed = reopened.record_published(preview.id, receipt)
     assert reopened.record_published(preview.id, receipt) == completed
@@ -940,11 +1006,11 @@ def test_simultaneous_finishes_record_one_completion(tmp_path: Path) -> None:
 
     def finish(run: ReviewRun) -> bool:
         barrier.wait(timeout=5)
+        writer = SqliteReviewRunStore(
+            _path(tmp_path), now=lambda: datetime.fromtimestamp(run.id, UTC)
+        )
         try:
-            assert (
-                _store(tmp_path).complete(run.complete_locally())
-                == run.complete_locally()
-            )
+            assert writer.complete(run.complete_locally()) == run.complete_locally()
         except ReviewAlreadyCompleted:
             return False
         return True
@@ -960,6 +1026,10 @@ def test_simultaneous_finishes_record_one_completion(tmp_path: Path) -> None:
     assert completion.publication_status == "not_published"
     assert store.completed(_SELECTION.identity) == completion
     assert _store(tmp_path).complete(completion) == completion
+    with sqlite3.connect(_path(tmp_path)) as connection:
+        assert connection.execute(
+            "SELECT recorded_at FROM review_completions"
+        ).fetchall() == [(winning.id,)]
 
     another = _saved(store, replace(_SELECTION, account="another"))
     assert store.complete(another.complete_locally()) == another.complete_locally()

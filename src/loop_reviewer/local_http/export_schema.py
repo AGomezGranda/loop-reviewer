@@ -11,6 +11,7 @@ from loop_reviewer.review.drafts import EditReviewDraft
 from loop_reviewer.review.generate import ReviewOutcome
 from loop_reviewer.review.history import ReviewHistory
 from loop_reviewer.review.publication import PreparePublication, PublishReview
+from loop_reviewer.review.stats import ReviewStats
 
 
 def _offline(*_args: object, **_kwargs: object) -> Never:
@@ -30,6 +31,7 @@ def main() -> None:
         review_pull_request=_offline,
         drafts=cast("EditReviewDraft", None),
         review_history=cast("ReviewHistory", None),
+        review_stats=cast("ReviewStats", None),
         active_reviews=cast("ActiveReviews", None),
         prepare=cast("PreparePublication", None),
         publish=cast("PublishReview", None),

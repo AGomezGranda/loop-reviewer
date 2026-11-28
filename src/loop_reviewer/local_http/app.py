@@ -14,7 +14,7 @@ from loop_reviewer.inbox.actions import InboxActions
 from loop_reviewer.inbox.configuration import ConfigureLocal
 from loop_reviewer.inbox.model import InboxReport
 from loop_reviewer.inbox.polling import ScanCycle
-from loop_reviewer.local_http import history, inbox, publication, review
+from loop_reviewer.local_http import history, inbox, publication, review, stats
 from loop_reviewer.local_http.errors import ERROR_TYPES, api_error
 from loop_reviewer.local_http.launches import ReviewLaunches, ReviewRequest
 from loop_reviewer.local_http.models import ErrorResponse
@@ -30,6 +30,7 @@ from loop_reviewer.review.publication import (
     PreparePublication,
     PublishReview,
 )
+from loop_reviewer.review.stats import ReviewStats
 
 
 def create_app(
@@ -44,6 +45,7 @@ def create_app(
     review_pull_request: ReviewRequest,
     drafts: EditReviewDraft,
     review_history: ReviewHistory,
+    review_stats: ReviewStats,
     active_reviews: ActiveReviews,
     prepare: PreparePublication,
     publish: PublishReview,
@@ -103,6 +105,7 @@ def create_app(
     )
     api.include_router(publication.routes(review_history, prepare, publish))
     api.include_router(history.routes(review_history))
+    api.include_router(stats.routes(review_stats))
     app.include_router(api)
     _register_errors(app)
 

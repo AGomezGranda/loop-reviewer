@@ -45,6 +45,7 @@ from loop_reviewer.review.publication import PreparePublication, PublishReview
 from loop_reviewer.review.publication_model import PublicationId
 from loop_reviewer.review.pull_request import PullRequestRef
 from loop_reviewer.review.selection import GitHubReadError, open_pull_request
+from loop_reviewer.review.stats import ReviewStats
 from loop_reviewer.reviewer.discussion_contract import (
     DiscussionSnapshotV1,
     DiscussionTarget,
@@ -62,6 +63,10 @@ from loop_reviewer.reviewer.model_contract import ReviewModel
 from loop_reviewer.reviewer.pinned_source import PinnedSource
 
 _MODEL_SPEND = "LOOP_REVIEWER_MAX_MODEL_SPEND_USD_MICROS"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 def _hosted_model(
@@ -203,11 +208,14 @@ class Workflows:
             )
 
     def edit_review_draft(self) -> EditReviewDraft:
-        return EditReviewDraft(SqliteReviewRunStore(self._database))
+        return EditReviewDraft(SqliteReviewRunStore(self._database, now=_utc_now))
 
     def review_history(self) -> ReviewHistory:
         store = SqliteReviewRunStore(self._database)
         return ReviewHistory(store, store)
+
+    def review_stats(self) -> ReviewStats:
+        return ReviewStats(SqliteReviewRunStore(self._database), _utc_now)
 
     def active_reviews(self) -> ActiveReviews:
         return ActiveReviews(
@@ -231,7 +239,7 @@ class Workflows:
                 )
             ),
         )
-        return PublishReview(SqliteReviewRunStore(self._database), guard)
+        return PublishReview(SqliteReviewRunStore(self._database, now=_utc_now), guard)
 
     def configure_inbox(self) -> TomlSettings:
         return self._config

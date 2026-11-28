@@ -1,8 +1,9 @@
 """Persist review runs, drafts, and completions in SQLite transactions."""
 
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from loop_reviewer.integrations.local_state.database import (
@@ -23,6 +24,9 @@ from loop_reviewer.integrations.local_state.records import (
     run_from_row,
     selection_from_json,
     selection_json,
+)
+from loop_reviewer.integrations.local_state.sqlite_review_stats import (
+    read_completion_facts,
 )
 from loop_reviewer.review.model import (
     MAX_STORED_INTEGER,
@@ -46,6 +50,7 @@ from loop_reviewer.review.publication_model import (
     PublicationRecord,
     PublicationStatus,
 )
+from loop_reviewer.review.stats import CompletionFact
 from loop_reviewer.review.store import (
     DraftConflict,
     ReviewActivity,
@@ -63,8 +68,11 @@ _UNREADABLE = "The local review database is unreadable."
 
 
 class SqliteReviewRunStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self, path: Path, *, now: Callable[[], datetime] | None = None
+    ) -> None:
         self._database = LocalDatabase(path)
+        self._now = now if now is not None else lambda: datetime.now(UTC)
 
     def latest(self, key: ReviewKey) -> ReviewRun | None:
         with self._read() as connection:
@@ -149,6 +157,10 @@ class SqliteReviewRunStore:
                     )
                 )
         return tuple(result)
+
+    def completion_facts(self) -> tuple[CompletionFact, ...]:
+        with self._read() as connection:
+            return read_completion_facts(connection)
 
     def completions(
         self, before_run_id: int | None, limit: int
@@ -390,8 +402,8 @@ class SqliteReviewRunStore:
             """
             INSERT INTO review_completions
                 (identity_key, run_id, draft_version, selection, final_draft, publication_status, github_review_id, publication_action,
-                 generation_model, estimated_cost_usd)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 generation_model, estimated_cost_usd, recorded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 identity_key(snapshot.selection.identity),
@@ -404,6 +416,7 @@ class SqliteReviewRunStore:
                 None if receipt is None else receipt.action,
                 snapshot.generation_model,
                 snapshot.estimated_cost_usd,
+                int(self._now().timestamp()),
             ),
         )
 

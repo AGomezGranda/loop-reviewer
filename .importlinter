@@ -46,6 +46,7 @@ forbidden_modules =
     loop_reviewer.review.selection
     loop_reviewer.review.store
     loop_reviewer.review.history
+    loop_reviewer.review.stats
 
 [importlinter:contract:5]
 name = Inbox rules do not depend on workflow operations or persistence ports

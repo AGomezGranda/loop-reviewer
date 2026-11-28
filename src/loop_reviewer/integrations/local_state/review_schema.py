@@ -68,3 +68,12 @@ def add_generation_metadata(connection: sqlite3.Connection, _from_version: int) 
 
 def add_reviewer_report(connection: sqlite3.Connection, _from_version: int) -> None:
     connection.execute("ALTER TABLE review_runs ADD COLUMN reviewer_report TEXT")
+
+
+def add_completion_recorded_at(
+    connection: sqlite3.Connection, _from_version: int
+) -> None:
+    connection.execute("""
+        ALTER TABLE review_completions ADD COLUMN recorded_at INTEGER
+        CHECK (recorded_at IS NULL OR (typeof(recorded_at) = 'integer' AND recorded_at >= 0))
+        """)

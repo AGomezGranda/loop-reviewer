@@ -51,6 +51,7 @@ def test_schema_7_setup_keeps_its_project_repository_and_scan(tmp_path: Path) ->
             "UPDATE inbox_repositories SET eligible_rows = json_remove(eligible_rows, '$[0][7]')"
         )
         connection.execute("ALTER TABLE inbox_settings DROP COLUMN scan_version")
+        connection.execute("ALTER TABLE review_completions DROP COLUMN recorded_at")
         connection.execute("PRAGMA user_version = 7")
 
     snapshot = SqliteInboxStore(path).snapshot(settings.version)
@@ -73,6 +74,7 @@ def test_schema_11_preserves_exclusions_and_initializes_scan_version(
     assert saved.version > first.version
     with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute("ALTER TABLE inbox_settings DROP COLUMN scan_version")
+        connection.execute("ALTER TABLE review_completions DROP COLUMN recorded_at")
         connection.execute("PRAGMA user_version = 11")
     snapshot = SqliteInboxStore(path).snapshot(saved.version)
     assert snapshot is not None

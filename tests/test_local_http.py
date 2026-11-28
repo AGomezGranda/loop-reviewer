@@ -90,6 +90,7 @@ def _app(
         review_pull_request=workflows.review,
         drafts=workflows.edit_review_draft(),
         review_history=workflows.review_history(),
+        review_stats=workflows.review_stats(),
         active_reviews=workflows.active_reviews(),
         prepare=workflows.prepare_publication(),
         publish=workflows.publish_review(),
@@ -112,6 +113,70 @@ async def client(tmp_path: Path) -> AsyncGenerator[httpx.AsyncClient]:
         httpx.AsyncClient(transport=transport, base_url=_ORIGIN) as session,
     ):
         yield session
+
+
+async def test_stats_reads_only_local_aggregates(
+    client: httpx.AsyncClient, tmp_path: Path
+) -> None:
+    store = SqliteReviewRunStore(tmp_path / "loop-reviewer" / "reviews.sqlite3")
+    for account in ("reviewer", "other"):
+        run = store.start(
+            replace(_SAVED_SELECTION, account=account), replaces=None
+        ).finish(_GENERATED)
+        store.save(run)
+        store.complete(run.complete_locally())
+    store.start(
+        replace(_SAVED_SELECTION, ref=replace(_SAVED_SELECTION.ref, number=2)),
+        replaces=None,
+    )
+    with sqlite3.connect(tmp_path / "loop-reviewer" / "reviews.sqlite3") as connection:
+        connection.execute(
+            "UPDATE review_completions SET recorded_at = NULL WHERE run_id = 1"
+        )
+        connection.execute(
+            "UPDATE review_completions SET final_draft = 'not decoded by stats'"
+        )
+
+    url = "/api/v1/stats"
+    assert (await client.get(url)).status_code == 401
+    response = await client.get(url, headers=_HEADERS)
+    assert response.status_code == 200
+    data = response.json()
+    counts = {"completed": 1, "published": 0, "completedLocally": 1}
+    option = {
+        "key": "github.com/42",
+        "host": "github.com",
+        "slug": "org/repo",
+        "legacyNameOnly": False,
+    }
+    assert data == {
+        "totals": counts,
+        "completedLast7Days": 1,
+        "undatedCompletions": 1,
+        "repositoryOptions": [option],
+        "repositories": [{"repository": option, "counts": counts}],
+        "weeks": data["weeks"],
+    }
+    assert sum(week["counts"]["completed"] for week in data["weeks"]) == 1
+    assert all(set(week) == {"start", "end", "counts"} for week in data["weeks"])
+    all_time = await client.get(
+        url, headers=_HEADERS, params={"range": "all", "repository": option["key"]}
+    )
+    assert all_time.status_code == 200
+    assert all_time.json()["totals"] == {
+        "completed": 2,
+        "published": 0,
+        "completedLocally": 2,
+    }
+    assert (
+        await client.get(url, headers=_HEADERS, params={"range": "7d"})
+    ).status_code == 422
+    assert (
+        await client.get(url, headers=_HEADERS, params={"repository": ""})
+    ).status_code == 422
+    assert (
+        await client.get(url, headers=_HEADERS, params={"repository": "github.com/99"})
+    ).status_code == 404
 
 
 async def test_saved_edit_can_be_returned_during_publication_history_failure(
