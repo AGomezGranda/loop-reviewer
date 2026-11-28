@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 from loop_reviewer.reviewer.local_check_contract import SourceEvidence, SourceLocation
-from loop_reviewer.reviewer.local_evidence import EvidenceIndex, LocalEvidenceWork
+from loop_reviewer.reviewer.local_evidence import (
+    EvidenceIndex,
+    LocalEvidenceWork,
+    source_resolves,
+)
 from loop_reviewer.reviewer.model_contract import Candidate, Impact, VerificationReplyV1
 from loop_reviewer.reviewer.pinned_source import (
     PinnedTextBlob,
@@ -164,25 +168,6 @@ def check_candidate(
             ):
                 anchor = loc
     return CheckedCandidate(identifier, file, candidate, tuple(accepted), anchor)
-
-
-def source_resolves(entry: SourceEvidence, work: LocalEvidenceWork) -> bool:
-    loc = entry.range
-    blob = work.blob(loc.side, loc.path)
-    return (
-        not isinstance(blob, str)
-        and work.excerpt(
-            SourceRange(
-                loc.side,
-                loc.commit_id,
-                loc.path,
-                loc.blob_id,
-                loc.start_line,
-                loc.end_line,
-            )
-        )
-        == entry.text
-    )
 
 
 def _claim(text: str) -> str:

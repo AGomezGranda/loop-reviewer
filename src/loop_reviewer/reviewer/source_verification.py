@@ -6,8 +6,9 @@ from typing import Literal
 from loop_reviewer.reviewer.local_check_contract import SourceEvidence, SourceLocation
 from loop_reviewer.reviewer.local_evidence import (
     EvidenceIndex,
-    LocalEvidenceWork,
+    PinnedEvidenceWork,
     WorkLimit,
+    source_resolves,
 )
 from loop_reviewer.reviewer.model_contract import (
     Candidate,
@@ -21,7 +22,6 @@ from loop_reviewer.reviewer.semantic_policy import (
     Discard,
     Finding,
     PrivateLead,
-    source_resolves,
 )
 from loop_reviewer.reviewer.text_references import literal_references
 
@@ -40,7 +40,7 @@ def build_source_packet(
     identifier: str,
     candidate: Candidate,
     bundle: EvidenceBundle,
-    work: LocalEvidenceWork,
+    work: PinnedEvidenceWork,
     index: EvidenceIndex,
 ) -> SourcePacket | PrivateLead:
     file = next(item for item in bundle.inventory if item.id == candidate.file_id)

@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, override
 
 from loop_reviewer.reviewer.inventory import RevisionSide
 from loop_reviewer.reviewer.inventory_contract import (
@@ -51,16 +51,14 @@ class WorkLimit(Exception):
 
 
 @dataclass
-class LocalEvidenceWork:
+class PinnedEvidenceWork:
     source: PinnedSource
-    analyzer: PythonAnalyzer | None
     comparison: PinnedComparison
     monotonic: Callable[[], float]
     deadline: float
     bytes_left: int = 8 * 1024 * 1024
     counts: dict[_Operation, int] = field(default_factory=dict)
     blobs: dict[_PathKey, PinnedTextBlob | ReadFailure] = field(default_factory=dict)
-    analyses: dict[_PathKey, PythonAnalysis | ReadFailure] = field(default_factory=dict)
     patches: dict[tuple[str | None, str | None], tuple[Hunk, ...] | ReadFailure] = (
         field(default_factory=dict)
     )
@@ -68,7 +66,6 @@ class LocalEvidenceWork:
         default_factory=dict
     )
     lines: dict[_PathKey, tuple[str, ...]] = field(default_factory=dict)
-    utf8_only: bool = False
 
     def remaining(self) -> float:
         time_left = self.deadline - self.monotonic()
@@ -129,25 +126,6 @@ class LocalEvidenceWork:
             return "unavailable"
         return blob
 
-    def analysis(
-        self, side: RevisionSide, path: str, *, expected: FileSide | None = None
-    ) -> PythonAnalysis | ReadFailure:
-        blob = self.blob(side, path, expected=expected)
-        if isinstance(blob, str):
-            return blob
-        key = side, path
-        if key not in self.analyses:
-            analysis = (
-                self.analyzer.analyze(blob, timeout_seconds=self._allocate("analysis"))
-                if self.analyzer is not None
-                else "unavailable"
-            )
-            self.remaining()
-            if not isinstance(analysis, str) and analysis.diagnostic.blob != blob:
-                analysis = "unavailable"
-            self.analyses[key] = analysis
-        return self.analyses[key]
-
     def hunks(self, change: ChangedFile) -> tuple[Hunk, ...] | ReadFailure:
         path = (
             change.old.path if change.old else None,
@@ -179,16 +157,14 @@ class LocalEvidenceWork:
     def text_lines(self, blob: PinnedTextBlob) -> tuple[str, ...]:
         key = blob.side, blob.path
         if key not in self.lines:
-            if self.utf8_only:
-                try:
-                    self.lines[key] = tuple(
-                        line.decode("utf-8") for line in lf_lines(blob.text)
-                    )
-                except UnicodeDecodeError:
-                    self.lines[key] = ()
-            else:
-                self.lines[key] = decoded_lines(blob)
+            self.lines[key] = self._decode(blob)
         return self.lines[key]
+
+    def _decode(self, blob: PinnedTextBlob) -> tuple[str, ...]:
+        try:
+            return tuple(line.decode("utf-8") for line in lf_lines(blob.text))
+        except UnicodeDecodeError:
+            return ()
 
     def excerpt(self, location: SourceRange) -> str | None:
         key = location.side, location.path
@@ -203,6 +179,65 @@ class LocalEvidenceWork:
         if not 1 <= location.start_line <= location.end_line <= len(lines):
             return None
         return "".join(lines[location.start_line - 1 : location.end_line])
+
+
+class LocalEvidenceWork(PinnedEvidenceWork):
+    def __init__(
+        self,
+        source: PinnedSource,
+        analyzer: PythonAnalyzer | None,
+        comparison: PinnedComparison,
+        monotonic: Callable[[], float],
+        deadline: float,
+        *,
+        utf8_only: bool = False,
+    ) -> None:
+        super().__init__(source, comparison, monotonic, deadline)
+        self.analyzer = analyzer
+        self.utf8_only = utf8_only
+        self.analyses: dict[_PathKey, PythonAnalysis | ReadFailure] = {}
+
+    @override
+    def _decode(self, blob: PinnedTextBlob) -> tuple[str, ...]:
+        return super()._decode(blob) if self.utf8_only else decoded_lines(blob)
+
+    def analysis(
+        self, side: RevisionSide, path: str, *, expected: FileSide | None = None
+    ) -> PythonAnalysis | ReadFailure:
+        blob = self.blob(side, path, expected=expected)
+        if isinstance(blob, str):
+            return blob
+        key = side, path
+        if key not in self.analyses:
+            analysis = (
+                self.analyzer.analyze(blob, timeout_seconds=self._allocate("analysis"))
+                if self.analyzer is not None
+                else "unavailable"
+            )
+            self.remaining()
+            if not isinstance(analysis, str) and analysis.diagnostic.blob != blob:
+                analysis = "unavailable"
+            self.analyses[key] = analysis
+        return self.analyses[key]
+
+
+def source_resolves(entry: SourceEvidence, work: PinnedEvidenceWork) -> bool:
+    loc = entry.range
+    blob = work.blob(loc.side, loc.path)
+    return (
+        not isinstance(blob, str)
+        and work.excerpt(
+            SourceRange(
+                loc.side,
+                loc.commit_id,
+                loc.path,
+                loc.blob_id,
+                loc.start_line,
+                loc.end_line,
+            )
+        )
+        == entry.text
+    )
 
 
 @dataclass

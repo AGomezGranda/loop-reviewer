@@ -4,7 +4,7 @@ import re
 
 from loop_reviewer.reviewer.inventory import RevisionSide
 from loop_reviewer.reviewer.local_check_contract import SourceEvidence, SourceLocation
-from loop_reviewer.reviewer.local_evidence import EvidenceIndex, LocalEvidenceWork
+from loop_reviewer.reviewer.local_evidence import EvidenceIndex, PinnedEvidenceWork
 from loop_reviewer.reviewer.pinned_source import SourceRange
 
 _LITERAL = re.compile(r"[A-Za-z_][A-Za-z0-9_]{5,63}")
@@ -15,7 +15,7 @@ _COMMON = frozenset(
 
 def literal_references(
     seeds: tuple[SourceEvidence, ...],
-    work: LocalEvidenceWork,
+    work: PinnedEvidenceWork,
     index: EvidenceIndex,
     *,
     sides: tuple[RevisionSide, ...],
